@@ -1,0 +1,10 @@
+pytest
+pytest-mock
+numpy
+pandas
+networkx
+scanpy
+scipy
+deap
+matplotlib
+seaborn
