@@ -1,6 +1,6 @@
 import pytest
+import scipy as sp
 import pandas as pd
-import numpy as np
 import networkx as nx
 from unittest.mock import MagicMock, patch
 from EvoFlow.biology import BioNetworkPreparer
