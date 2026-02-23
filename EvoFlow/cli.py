@@ -5,45 +5,33 @@ import pandas as pd
 import warnings
 from EvoFlow.biology import BioNetworkPreparer
 from EvoFlow.core import GAOptimizer, extract_active_subgraph
-from EvoFlow.visualization import plot_optimization_history, plot_node_proportions, plot_weights, save_network
+from EvoFlow.visualization import plot_optimization_history, plot_node_proportions, plot_node_attribute, plot_edge_attribute, save_network
 
-def main():
-    # Ignore warnings
+
+
+
+
+def run_evoflow(network, annotation, file, regulons, receptors_raw, mediators_raw, 
+                ligands_file, label, celltype, generations=10000, pop_size=1000):
+    """
+    This function contains all your logic and can be called from other scripts.
+    """
     warnings.filterwarnings("ignore")
     
-    # Argument Parser
-    parser = argparse.ArgumentParser(description="EvoFlow: Network Analysis and GA Optimization")
-    
-    parser.add_argument("-n", "--network", help="Network from nichenet", required=True)
-    parser.add_argument("-a", "--annotation", help="Annotation file", required=True)
-    parser.add_argument("-f", "--file", help="h5ad file path", required=True)
-    parser.add_argument("-r", "--regulons", help="Regulons file", required=True)
-    parser.add_argument("-b", "--receptors", help="Receptors (pipe separated)", required=True) 
-    parser.add_argument("-m", "--mediators", help="Mediators (comma separated)", required=True)
-    parser.add_argument("-s", "--ligands", help="Ligands CSV file", required=True)
-    parser.add_argument("-l", "--label", help="adata.obs label column", required=True)
-    parser.add_argument("-c", "--celltype", help="Cell type of interest", required=True)
-    parser.add_argument("--generations", help="Number of GA generations", type=int, default=10000)
-    parser.add_argument("--pop_size", help="Population size", type=int, default=1000)
-
-    args = parser.parse_args()
-    
-    # Process Inputs
-    receptors = args.receptors.split('|')
-    mediators = args.mediators.split(',')
+    # Process Inputs (Logic moved from main)
+    receptors = receptors_raw.split('|')
+    mediators = mediators_raw.split(',')
     mediators_list = mediators + receptors
     
-    # Load Ligands
-    ligands_df = pd.read_csv(args.ligands)
-    # Assuming 'x' column exists as per original script
+    ligands_df = pd.read_csv(ligands_file)
     ligands = ligands_df.x.values.tolist()
     
-    filename_prefix = str.split(str.split(os.path.basename(args.file), ".")[0], "tmp")[0]
+    filename_prefix = str.split(str.split(os.path.basename(file), ".")[0], "tmp")[0]
 
     # --- Biology Phase ---
     preparer = BioNetworkPreparer()
-    preparer.load_data(args.network, args.annotation, args.file, args.regulons)
-    
+    preparer.load_data(network, annotation, file, regulons)
+
     preparer.filter_expression_data(args.label, args.celltype)
     preparer.compute_percolation()
     preparer.build_base_network()
@@ -56,8 +44,8 @@ def main():
     
     # Visualization (Pre-optimization)
     plot_node_proportions(preparer.annotation, filename_prefix)
-    plot_weights(preparer.net_df, filename_prefix)
-    
+    plot_node_attribute(preparer.G, filename_prefix, attribute='weight', show=False)
+    plot_edge_attribute(preparer.G, filename_prefix, 'capacity', show=False)
     # Prepare Topology (Add SuperSource/Sink)
     sources, sinks = preparer.prepare_flow_topology(ligands, target_genes)
     
@@ -102,10 +90,44 @@ def main():
     # Save Final Network
     # Apply removals to SG to get final result
     Final_G = SG.copy()
-    Final_G.remove_nodes_from(best_nodes_removed)
     save_network(Final_G, filename_prefix)
     
     print(f"{time.ctime()} - Optimization Complete.")
+    return filename_prefix # Or return the Final_G if you want to use it in Python
+
+
+
+def main():
+    # This only runs when calling from CLI
+    parser = argparse.ArgumentParser(description="EvoFlow: Network Analysis and GA Optimization")
+    parser.add_argument("-n", "--network", required=True)
+    parser.add_argument("-a", "--annotation", required=True)
+    parser.add_argument("-f", "--file", required=True)
+    parser.add_argument("-r", "--regulons", required=True)
+    parser.add_argument("-b", "--receptors", required=True) 
+    parser.add_argument("-m", "--mediators", required=True)
+    parser.add_argument("-s", "--ligands", required=True)
+    parser.add_argument("-l", "--label", required=True)
+    parser.add_argument("-c", "--celltype", required=True)
+    parser.add_argument("--generations", type=int, default=10000)
+    parser.add_argument("--pop_size", type=int, default=1000)
+
+    args = parser.parse_args()
+    
+    # Call the new function using arguments from the CLI
+    run_evoflow(
+        network=args.network,
+        annotation=args.annotation,
+        file=args.file,
+        regulons=args.regulons,
+        receptors_raw=args.receptors,
+        mediators_raw=args.mediators,
+        ligands_file=args.ligands,
+        label=args.label,
+        celltype=args.celltype,
+        generations=args.generations,
+        pop_size=args.pop_size
+    )
 
 if __name__ == "__main__":
     main()

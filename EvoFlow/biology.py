@@ -66,7 +66,11 @@ class BioNetworkPreparer:
         self.percolation_values = {i: df.loc[i] if i in df else 0 for i, v in self.annotation.items()}
         return self.percolation_values
 
-    def build_base_network(self):
+    def build_base_network(self, 
+                           start:str = 'start', 
+                           to: str='to',
+                           weight: str='weight',
+                           edge_type: str = 'layer'):
         """
         Constructs the initial NetworkX DiGraph from the loaded network dataframe and annotations.
         """
@@ -84,12 +88,10 @@ class BioNetworkPreparer:
         # Based on original script: value[1]=start, value[2]=to, value[3]=weight, value[4]=edge_type
         edges = []
         for row in self.net_df.itertuples(index=False):
-            # Safe unpacking based on column names would be better, but sticking to logic
-            # Assuming standard 4 column format based on script
-            u = row.start
-            v = row.to
-            w = row.weight
-            et = row.edge_type
+            u = getattr(row, start)
+            v = getattr(row, to)
+            w = getattr(row, weight)
+            et = getattr(row, edge_type)
             edges.append((u, v, {'weight': w, 'edge_type': et}))
             
         self.G.add_edges_from(edges)
@@ -156,23 +158,26 @@ class BioNetworkPreparer:
         supersink = [('SuperSink', {'node_type': 'TargetGenes', 'percolation': 0})]
         
         dummy_sink_edges = []
-        dummy_nodes = []
+        dummy_source_edges = []
         
+        dummy_sinks = []
+        dummy_sources = []
+
         for node in sinks:
             if node in self.G: # Only add if node exists in graph
                 dummy_name = f"dummy_{node}"
-                dummy_nodes.append((dummy_name, {'node_type': 'dummy', 'percolation': 1}))
+                dummy_sinks.append((dummy_name, {'node_type': 'dummy', 'percolation': 1}))
                 
                 # Edge from Gene -> Dummy
                 dummy_sink_edges.append((node, dummy_name, {'weight': 1, 'edge_type': 'sink', 'capacity': mean_capacity}))
         
         # Edges from Dummy -> SuperSink
         sink_edges = []
-        for node in dummy_nodes:
+        for node in dummy_sinks:
             sink_edges.append((node[0], 'SuperSink', {'weight': 1, 'edge_type': 'sink', 'capacity': 999}))
 
         self.G.add_nodes_from(supersink)
-        self.G.add_nodes_from(dummy_nodes)
+        self.G.add_nodes_from(dummy_sinks)
         self.G.add_edges_from(dummy_sink_edges)
         self.G.add_edges_from(sink_edges)
 
@@ -192,16 +197,30 @@ class BioNetworkPreparer:
                         if attrs.get("node_type") == "receptor":
                             connected_receptors.add(neighbor)
 
-        source_edges = []
+        # Create dummy source nodes similar to dummy sinks
+        dummy_source_nodes = []
+        dummy_source_edges = []
+        
         for node in connected_receptors:
-            source_edges.append(('SuperSource', node, {'weight': 1, 'edge_type': 'source', 'capacity': 999}))
+            dummy_name = f"dummy_{node}"
+            dummy_source_nodes.append((dummy_name, {'node_type': 'dummy', 'percolation': 1}))
+            
+            # Edge from Receptor -> Dummy Source
+            dummy_source_edges.append((dummy_name, node, {'weight': 1, 'edge_type': 'source', 'capacity': mean_capacity}))
+        
+        # Edges from Dummy Source -> SuperSource
+        source_edges = []
+        for node in dummy_source_nodes:
+            source_edges.append(('SuperSource', node[0], {'weight': 1, 'edge_type': 'source', 'capacity': 999}))
 
         self.G.add_nodes_from(supersource)
+        self.G.add_nodes_from(dummy_source_nodes)
+        self.G.add_edges_from(dummy_source_edges)
         self.G.add_edges_from(source_edges)
         
         # Define sources and sinks lists for the GA
-        final_sources = ligands + ['SuperSource']
-        final_sinks = [n[0] for n in dummy_nodes] + ['SuperSink']
+        final_sources = ['SuperSource'] + [n[0] for n in dummy_source_nodes]
+        final_sinks = [n[0] for n in dummy_sinks] + ['SuperSink']
         
         return final_sources, final_sinks
 

@@ -179,7 +179,13 @@ class GAOptimizer:
         self.toolbox.register("mutate", mutate_shuffle, indpb=0.05, min_removed=2, max_removed=10)
         self.toolbox.register("select", tools.selTournament, tournsize=3)
 
-    def run(self, population_size=300, generations=100, early_stop_gen=10, tol=1e-6, use_multiprocessing=True):
+    def run(self, 
+            population_size=300, 
+            generations=100, 
+            early_stop_gen=10, 
+            tol=1e-6, 
+            use_multiprocessing=True,
+            verbose=False):
         """
         Runs the Genetic Algorithm.
         """
@@ -239,7 +245,8 @@ class GAOptimizer:
                 
                 # Stats
                 record = stats.compile(population)
-                print(f"Gen {gen}: {record}")
+                if verbose:
+                    print(f"Gen {gen}: {record}")
                 logs[gen] = record
                 
                 # Early Stopping
