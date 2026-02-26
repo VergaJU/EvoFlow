@@ -177,7 +177,11 @@ def constrained_evaluate(individual, G, removable_nodes, ssource, ssink, max_rem
     # Otherwise, return actual fitness
     return evaluate(individual, G, removable_nodes, ssource, ssink)
 
-
+# --- MockIndividual to normalize front ---
+class MockIndividual:
+    def __init__(self, values):
+        # We create a fake fitness object with a values attribute
+        self.fitness = type('Fitness', (), {'values': values})
 # --- GA Engine Class ---
 
 class GAOptimizer:
@@ -255,6 +259,18 @@ class GAOptimizer:
         # self.toolbox.register("select", tools.selTournament, tournsize=3)
 
 
+    def normalize_fitness(self, fitness_tuple):
+            """
+            Scales fitness values to [0, 1] range.
+            Original: (Flow, Cost, Redundancy)
+            """
+            f0 = fitness_tuple[0] / self.base_flow
+            f1 = fitness_tuple[1] / self.base_cost
+            f2 = fitness_tuple[2] / self.base_redundancy
+            
+            norm_fitness_tuple = (min(f0, 1.0), min(f1, 1.0), min(f2, 1.0))
+            # Clip values to [0, 1] just in case logic results in slightly higher values
+            return norm_fitness_tuple
 
     def run(self, 
             population_size=300, 
@@ -337,7 +353,25 @@ class GAOptimizer:
                 if feasible_pop:
                     front = tools.sortNondominated(feasible_pop, len(feasible_pop), first_front_only=True)[0].copy()
 
-                    current_hv = hypervolume(front)
+                    normalized_mock_front = []
+                    for ind in front:
+                        # Create a dummy object
+                        mock_ind = type('MockIndividual', (), {})()
+                        
+                        # Instantiate a REAL Fitness object of the same class you used for the GA
+                        # This will have the 'weights' and 'wvalues' logic built-in
+                        mock_ind.fitness = creator.FitnessMin()
+                        
+                        # Normalize the values
+                        norm_values = self.normalize_fitness(ind.fitness.values)
+                        
+                        # Setting .values automatically triggers DEAP to calculate .wvalues
+                        mock_ind.fitness.values = norm_values
+                        
+                        normalized_mock_front.append(mock_ind)
+    
+                    current_hv = hypervolume(normalized_mock_front, ref_point)
+                    # current_hv = hypervolume(front)
                     if current_hv > best_hv + tol:
                         best_hv = current_hv
                         generations_without_improvement = 0
@@ -369,4 +403,4 @@ class GAOptimizer:
         # Convert best individual (binary mask) back to node names
         best_nodes_removed = [node for i, node in enumerate(self.removable_nodes) if best_ind[i] == 0]
         
-        return best_nodes_removed, logs
+        return best_nodes_removed, logs, population
