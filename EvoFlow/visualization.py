@@ -8,27 +8,60 @@ import json
 
 def plot_optimization_history(logs, filename_prefix):
     """
-    Plots the average fitness with min-max range across generations.
+    Plots optimization history across generations in a 2x2 subplot grid.
+    The function assumes the data (either a DataFrame or a dict) contains
+    metrics with tuple values to expand into separate columns, plus an
+    optional 'hv' (hypervolume) metric.
+
+    Layout:
+    - Top-left (titled **Flow**): first tuple element
+    - Top-right (titled **Nodes**): second tuple element
+    - Bottom-left (titled **Redundancy**): third tuple element
+    - Bottom-right (titled **Hypervolume**): hv metric (if available)
+
+    The x-axis for all panels is the generation number (`gen`).
     """
+    # normalize input to a DataFrame with a 'gen' column
     if isinstance(logs, dict):
+        # each key is a generation, value is a dict of metrics
         logs_df = pd.DataFrame(logs).T
-        logs_df['min'] = logs_df['min'].apply(lambda x: float(x[0]))
-        logs_df['max'] = logs_df['max'].apply(lambda x: float(x[0]))
+
+        # expand tuple values into separate columns
+        for col in logs_df.columns:
+            sample = logs_df[col].iloc[0]
+            if isinstance(sample, (list, tuple)) and len(sample) > 1:
+                # expand into multiple columns
+                expanded = pd.DataFrame(logs_df[col].tolist(),
+                                        index=logs_df.index)
+                for i, newcol in enumerate(expanded.columns):
+                    logs_df[f"{col}_{i}"] = expanded[newcol]
+                logs_df = logs_df.drop(columns=[col])
         logs_df = logs_df.reset_index(names='gen')
     else:
-        logs_df = logs # Assume already dataframe
+        logs_df = logs.copy()
+        if 'gen' not in logs_df.columns:
+            logs_df = logs_df.reset_index(names='gen')
 
-    plt.figure(figsize=(8, 5))
-    sns.lineplot(x='gen', y='avg', data=logs_df, marker='o', label='Average', color='b')
-    plt.fill_between(logs_df['gen'], logs_df['min'], logs_df['max'], color='b', alpha=0.1)
-
-    plt.xlabel('Generation')
-    plt.ylabel('Value')
-    plt.title('Average with Min-Max Range Across Generations')
-    plt.grid(True)
-    plt.legend()
+    # determine data columns to plot
+    value_cols = [c for c in logs_df.columns if c != 'gen']
+    titles = ['Hypervolume', 'Flow', 'Nodes', 'Redundancy']
     
+    # create 2x2 subplot grid
+    fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+    axes_flat = axes.flatten()
+    
+    for ax, title, col in zip(axes_flat, titles, value_cols[:4]):
+        if col in logs_df.columns:
+            sns.lineplot(x='gen', y=col, data=logs_df, marker='o', ax=ax)
+            ax.set_title(title)
+            ax.set_xlabel('Generation')
+            ax.set_ylabel(title)
+            ax.grid(True)
+        else:
+            ax.axis('off')
+
     fig_name = filename_prefix + "optimization_values.png"
+    plt.tight_layout()
     plt.savefig(fig_name)
     plt.close()
 

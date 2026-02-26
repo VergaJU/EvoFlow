@@ -3,7 +3,8 @@ import time
 import networkx as nx
 import multiprocessing
 from deap import base, creator, tools
-
+from deap.benchmarks.tools import hypervolume
+import functools
 # --- Helper Functions (Graph Algorithms) ---
 
 def find_scc(G):
@@ -14,23 +15,31 @@ def find_scc(G):
     sccs = [i for i in nx.strongly_connected_components(G) if len(i) > 1]
     return sccs
 
-def receptor_targets_coocurrence(sccs, receptors, target_genes):
-    """
-    Calculates co-occurrence of receptors and target genes in SCCs.
-    """
-    coocurrence = 0
-    receptors_set = set(receptors)
-    targets_set = set(target_genes)
-    
+
+def scc_redundancy(sccs):
+    redundancy = 0
     for scc in sccs:
-        nodes = list(scc)
-        # Find receptors and target genes in the SCC
-        receptors_sccs = [node for node in nodes if node in receptors_set]
-        targets_sccs = [node for node in nodes if node in targets_set]
+        if len(scc) > 1:
+            redundancy += len(scc)**2
+    return redundancy
+
+# def receptor_targets_coocurrence(sccs, receptors, target_genes):
+#     """
+#     Calculates co-occurrence of receptors and target genes in SCCs.
+#     """
+#     coocurrence = 0
+#     receptors_set = set(receptors)
+#     targets_set = set(target_genes)
+    
+#     for scc in sccs:
+#         nodes = list(scc)
+#         # Find receptors and target genes in the SCC
+#         receptors_sccs = [node for node in nodes if node in receptors_set]
+#         targets_sccs = [node for node in nodes if node in targets_set]
         
-        # Calculate co-occurrence
-        coocurrence += len(receptors_sccs) * len(targets_sccs)
-    return coocurrence
+#         # Calculate co-occurrence
+#         coocurrence += len(receptors_sccs) * len(targets_sccs)
+#     return coocurrence
 
 def calculate_flow_capacity(G, ssource, ssink):
     """
@@ -68,7 +77,7 @@ def generate_individual(icls, removable_nodes, max_remove=3):
     1 = Keep Node, 0 = Remove Node.
     """
     ind = [1] * len(removable_nodes)
-    n_remove = random.randint(2, max_remove)
+    n_remove = random.randint(1, max_remove)
     # Ensure we don't try to remove more than exist
     n_remove = min(n_remove, len(removable_nodes))
     
@@ -77,41 +86,49 @@ def generate_individual(icls, removable_nodes, max_remove=3):
         ind[i] = 0
     return icls(ind)
 
-def cleanup_individual(ind, min_removed=2, max_removed=5):
+
+
+def repair_individual(ind, min_remove=2, max_remove=10):
     """
     Repairs an individual to stay within deletion bounds.
     """
-    current_removed = sum(1 for gene in ind if gene == 0)
+    current_removed = ind.count(0)
+    modified = False
     
-    # Too many deletions
-    if current_removed > max_removed:
+    # Too many deletions (flip 0 -> 1)
+    if current_removed > max_remove:
         zero_indices = [i for i, g in enumerate(ind) if g == 0]
-        to_flip = random.sample(zero_indices, current_removed - max_removed)
+        to_flip = random.sample(zero_indices, current_removed - max_remove)
         for i in to_flip:
             ind[i] = 1
+        modified = True
 
-    # Too few deletions
-    elif current_removed < min_removed:
+    # Too few deletions (flip 1 -> 0)
+    elif current_removed < min_remove:
         one_indices = [i for i, g in enumerate(ind) if g == 1]
-        # Ensure we have enough ones to flip
-        if len(one_indices) >= (min_removed - current_removed):
-            to_flip = random.sample(one_indices, min_removed - current_removed)
+        if len(one_indices) >= (min_remove - current_removed):
+            to_flip = random.sample(one_indices, min_remove - current_removed)
             for i in to_flip:
                 ind[i] = 0
-    
+        modified = True
+
+    # If we modified the genes, we MUST invalidate the fitness
+    if modified and hasattr(ind, "fitness"):
+        del ind.fitness.values
+        
     return ind
 
-def mutate_shuffle(individual, indpb=0.05, min_removed=2, max_removed=10):
+def mutate(individual, indpb=0.05):
     """
     Wrapper for shuffle mutation that includes cleanup.
     """
-    tools.mutShuffleIndexes(individual, indpb)
-    cleanup_individual(individual, min_removed, max_removed)
+    tools.mutFlipBit(individual, indpb)
+    # cleanup_individual(individual, min_remove, max_remove)
     return (individual,)
 
 # --- Evaluation Function (Must be top-level for multiprocessing) ---
 
-def evaluate(individual, G, removable_nodes, ssource, ssink, receptors, target_genes):
+def evaluate(individual, G, removable_nodes, ssource, ssink):
     """
     Fitness Function.
     Objectives (minimized):
@@ -131,26 +148,72 @@ def evaluate(individual, G, removable_nodes, ssource, ssink, receptors, target_g
     
     # 2. SCC Co-occurrence
     sccs = find_scc(G_copy)
-    cooccurrence = receptor_targets_coocurrence(sccs, receptors, target_genes)
-    
+    redundancy = scc_redundancy(sccs=sccs)
     # 3. Cost (Number of nodes removed)
     cost = len(removed_nodes_names)
 
-    return flow_value, cost, cooccurrence
+    return flow_value, cost, redundancy
+
+# --- Constraint Helpers ---
+
+def check_feasible(individual, max_remove):
+    """Returns True if the individual removes no more than max_remove nodes."""
+    return individual.count(0) <= max_remove
+
+def penalty_distance(individual, max_remove):
+    """Calculates how far the individual is from being feasible."""
+    return float((individual.count(0) - max_remove) ** 2)
+
+def constrained_evaluate(individual, G, removable_nodes, ssource, ssink, max_remove):
+    """
+    A manual wrapper that mimics DeltaPenalty but is picklable.
+    """
+    if not check_feasible(individual, max_remove):
+        # Penalty values (must be a tuple for multi-objective)
+        penalty_base = (1e6, 1e6, 1e6)
+        dist = penalty_distance(individual, max_remove)
+        return tuple(p + dist for p in penalty_base)
+    
+    # Otherwise, return actual fitness
+    return evaluate(individual, G, removable_nodes, ssource, ssink)
+
 
 # --- GA Engine Class ---
 
 class GAOptimizer:
-    def __init__(self, G, sources, sinks, receptors, target_genes):
+    def __init__(self, 
+                 G, 
+                 sources, 
+                 sinks, 
+                 max_remove = 10, 
+                 min_remove = 1,
+                 constrained=False,
+                 repair = False):
         self.G = G
         self.sources = sources
         self.sinks = sinks
-        self.receptors = receptors
-        self.target_genes = target_genes
-        
+        self.min_remove = min_remove
+        self.max_remove=max_remove
+        self.constrained = constrained
+        self.repair = repair
         # Determine removable nodes (All nodes except Sources and Sinks)
         self.removable_nodes = list(set(set(G.nodes) - set(sources)) - set(sinks))
         
+        # Determine max flow and SCC:
+        # Calculate Baselines for Normalization
+        # Use the original graph (0 nodes removed) as the "Max" reference
+        self.base_flow, _, self.base_redundancy = evaluate([1] * len(self.removable_nodes), # Individual where all nodes are kept (all 1s)
+                                                           self.G,
+                                                           self.removable_nodes,
+                                                           'SuperSource',
+                                                           'SuperSink'
+                                                           )
+        
+        # Handle cases where base values might be 0 to avoid DivisionByZero
+        self.base_flow = max(self.base_flow, 1.0)
+        self.base_redundancy = max(self.base_redundancy, 1.0)
+        self.base_cost = max(max_remove, 1.0)
+
         # DEAP Setup
         # Use a unique name for creator classes to avoid conflicts if re-instantiated
         if not hasattr(creator, "FitnessMin"):
@@ -164,20 +227,34 @@ class GAOptimizer:
         self.toolbox.register("individual", generate_individual, 
                               icls=creator.Individual, 
                               removable_nodes=self.removable_nodes, 
-                              max_remove=10)
+                              max_remove=self.max_remove)
         self.toolbox.register("population", tools.initRepeat, list, self.toolbox.individual)
         
-        self.toolbox.register("evaluate", evaluate, 
-                              G=self.G, 
-                              removable_nodes=self.removable_nodes, 
-                              ssource='SuperSource', 
-                              ssink='SuperSink',
-                              receptors=self.receptors,
-                              target_genes=self.target_genes)
-                              
-        self.toolbox.register("mate", tools.cxTwoPoint)
-        self.toolbox.register("mutate", mutate_shuffle, indpb=0.05, min_removed=2, max_removed=10)
-        self.toolbox.register("select", tools.selTournament, tournsize=3)
+
+        if self.constrained:
+            self.toolbox.register("evaluate", constrained_evaluate, 
+                                G=self.G, 
+                                removable_nodes=self.removable_nodes, 
+                                ssource='SuperSource', 
+                                ssink='SuperSink',
+                                max_remove=self.max_remove)
+        else:
+            self.toolbox.register("evaluate", evaluate, 
+                                G=self.G, 
+                                removable_nodes=self.removable_nodes, 
+                                ssource='SuperSource', 
+                                ssink='SuperSink')
+
+        self.toolbox.register("mate", tools.cxUniform, indpb=0.5)
+        self.toolbox.register("mutate", mutate, indpb=0.05)
+        
+        self.toolbox.register("repair", repair_individual, min_remove=self.min_remove, max_remove=self.max_remove)
+
+        # change selection to NSGA for real multi-objective
+        self.toolbox.register("select", tools.selNSGA2)
+        # self.toolbox.register("select", tools.selTournament, tournsize=3)
+
+
 
     def run(self, 
             population_size=300, 
@@ -204,11 +281,12 @@ class GAOptimizer:
                 ind.fitness.values = fit
                 
             stats = tools.Statistics(lambda ind: ind.fitness.values)
-            stats.register("avg", lambda x: sum([i[0] for i in x]) / len(x))
+            # stats.register("avg", lambda x: sum([i[0] for i in x]) / len(x))
             stats.register("min", min)
-            stats.register("max", max)
-            
-            best_fitness = None
+            # stats.register("max", max)
+            ref_point = (1.1, 1.1, 1.1) 
+            best_hv = 0.0
+
             generations_without_improvement = 0
             logs = {}
             
@@ -223,8 +301,6 @@ class GAOptimizer:
                 for child1, child2 in zip(offspring[::2], offspring[1::2]):
                     if random.random() < 0.5:
                         self.toolbox.mate(child1, child2)
-                        cleanup_individual(child1, min_removed=2, max_removed=10)
-                        cleanup_individual(child2, min_removed=2, max_removed=10)
                         del child1.fitness.values
                         del child2.fitness.values
 
@@ -233,7 +309,12 @@ class GAOptimizer:
                     if random.random() < 0.2:
                         self.toolbox.mutate(mutant)
                         del mutant.fitness.values
-                        
+    
+                # is repair is set as True, then repair not viable individuals
+                if self.repair:
+                    for mutant in offspring:
+                        self.toolbox.repair(mutant)
+
                 # Evaluation
                 invalid_ind = [ind for ind in offspring if not ind.fitness.valid]
                 fitnesses = self.toolbox.map(self.toolbox.evaluate, invalid_ind)
@@ -241,7 +322,8 @@ class GAOptimizer:
                     ind.fitness.values = fit
                     
                 # Replacement
-                population[:] = offspring
+                # Include parents for elitism
+                population[:] = self.toolbox.select(population + offspring, len(population))
                 
                 # Stats
                 record = stats.compile(population)
@@ -250,15 +332,31 @@ class GAOptimizer:
                 logs[gen] = record
                 
                 # Early Stopping
-                current_best_fitness = min([ind.fitness.values[0] for ind in population])
-                if best_fitness is None or current_best_fitness < best_fitness - tol:
-                    best_fitness = current_best_fitness
-                    generations_without_improvement = 0
+                feasible_pop = [ind for ind in population if ind.fitness.values[0] < 1e5]
+                
+                if feasible_pop:
+                    front = tools.sortNondominated(feasible_pop, len(feasible_pop), first_front_only=True)[0].copy()
+
+                    current_hv = hypervolume(front)
+                    if current_hv > best_hv + tol:
+                        best_hv = current_hv
+                        generations_without_improvement = 0
+                    else:
+                        generations_without_improvement += 1
                 else:
-                    generations_without_improvement += 1
-                    
+                    # If no feasible individuals yet, we don't increment/decrement early stopping
+                    current_hv = 0.0
+
+                # --- STATS AND LOGGING ---
+                record = stats.compile(population)
+                record['hv'] = current_hv  # Track HV in logs
+                logs[gen] = record
+                
+                if verbose:
+                    print(f"Gen {gen}: HV={current_hv:.4f}, {record}")
+
                 if generations_without_improvement >= early_stop_gen:
-                    print(f"Early stopping at generation {gen}.")
+                    print(f"Early stopping at generation {gen} (No HV improvement).")
                     break
                     
         finally:
