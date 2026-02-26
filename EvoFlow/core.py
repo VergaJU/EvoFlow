@@ -192,7 +192,8 @@ class GAOptimizer:
                  max_remove = 10, 
                  min_remove = 1,
                  constrained=False,
-                 repair = False):
+                 repair = False,
+                 norm_hypervolume = False):
         self.G = G
         self.sources = sources
         self.sinks = sinks
@@ -200,6 +201,7 @@ class GAOptimizer:
         self.max_remove=max_remove
         self.constrained = constrained
         self.repair = repair
+        self.norm_hypervolume = norm_hypervolume
         # Determine removable nodes (All nodes except Sources and Sinks)
         self.removable_nodes = list(set(set(G.nodes) - set(sources)) - set(sinks))
         
@@ -217,7 +219,7 @@ class GAOptimizer:
         self.base_flow = max(self.base_flow, 1.0)
         self.base_redundancy = max(self.base_redundancy, 1.0)
         self.base_cost = max(max_remove, 1.0)
-
+        self.N = len(self.removable_nodes)
         # DEAP Setup
         # Use a unique name for creator classes to avoid conflicts if re-instantiated
         if not hasattr(creator, "FitnessMin"):
@@ -250,7 +252,7 @@ class GAOptimizer:
                                 ssink='SuperSink')
 
         self.toolbox.register("mate", tools.cxUniform, indpb=0.5)
-        self.toolbox.register("mutate", mutate, indpb=0.05)
+        self.toolbox.register("mutate", mutate, indpb=1.0/self.N)
         
         self.toolbox.register("repair", repair_individual, min_remove=self.min_remove, max_remove=self.max_remove)
 
@@ -315,14 +317,14 @@ class GAOptimizer:
                 
                 # Crossover
                 for child1, child2 in zip(offspring[::2], offspring[1::2]):
-                    if random.random() < 0.5:
+                    if random.random() < 0.9:
                         self.toolbox.mate(child1, child2)
                         del child1.fitness.values
                         del child2.fitness.values
 
                 # Mutation
                 for mutant in offspring:
-                    if random.random() < 0.2:
+                    if random.random() < 0.3:
                         self.toolbox.mutate(mutant)
                         del mutant.fitness.values
     
@@ -353,25 +355,28 @@ class GAOptimizer:
                 if feasible_pop:
                     front = tools.sortNondominated(feasible_pop, len(feasible_pop), first_front_only=True)[0].copy()
 
-                    normalized_mock_front = []
-                    for ind in front:
-                        # Create a dummy object
-                        mock_ind = type('MockIndividual', (), {})()
-                        
-                        # Instantiate a REAL Fitness object of the same class you used for the GA
-                        # This will have the 'weights' and 'wvalues' logic built-in
-                        mock_ind.fitness = creator.FitnessMin()
-                        
-                        # Normalize the values
-                        norm_values = self.normalize_fitness(ind.fitness.values)
-                        
-                        # Setting .values automatically triggers DEAP to calculate .wvalues
-                        mock_ind.fitness.values = norm_values
-                        
-                        normalized_mock_front.append(mock_ind)
-    
-                    current_hv = hypervolume(normalized_mock_front, ref_point)
-                    # current_hv = hypervolume(front)
+                    if self.norm_hypervolume:
+                        normalized_mock_front = []
+                        for ind in front:
+                            # Create a dummy object
+                            mock_ind = type('MockIndividual', (), {})()
+                            
+                            # Instantiate a REAL Fitness object of the same class you used for the GA
+                            # This will have the 'weights' and 'wvalues' logic built-in
+                            mock_ind.fitness = creator.FitnessMin()
+                            
+                            # Normalize the values
+                            norm_values = self.normalize_fitness(ind.fitness.values)
+                            
+                            # Setting .values automatically triggers DEAP to calculate .wvalues
+                            mock_ind.fitness.values = norm_values
+                            
+                            normalized_mock_front.append(mock_ind)
+        
+                        current_hv = hypervolume(normalized_mock_front, ref_point)
+                    else:
+                        current_hv = hypervolume(front)
+
                     if current_hv > best_hv + tol:
                         best_hv = current_hv
                         generations_without_improvement = 0
