@@ -23,4 +23,4 @@ def save_population(population, filename="ga_population.pkl"):
 
 # Save Normalized front
 def save_norm(norm, filename="ga_norm.tsv"):
-    np.savetxt(fname=filename, X=norm, delimiter='\t')
+    pd.DataFrame(norm, columns = ['Flow','Nodes','SCC redundancy']).to_csv(filename, sep='\t')
