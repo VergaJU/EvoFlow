@@ -21,6 +21,12 @@ def save_population(population, filename="ga_population.pkl"):
     with open(filename, 'wb') as f:
         pickle.dump(population, f, protocol=pickle.HIGHEST_PROTOCOL)
 
+# Save logs to pickle
+
+def save_logs(logs, filename="ga_logs.pkl"):
+    with open(filename, 'wb') as f:
+        pickle.dump(logs, f, protocol=pickle.HIGHEST_PROTOCOL)
+
 # Save Normalized front
 def save_norm(norm, filename="ga_norm.tsv"):
     pd.DataFrame(norm, columns = ['Flow','Nodes','SCC redundancy']).to_csv(filename, sep='\t')

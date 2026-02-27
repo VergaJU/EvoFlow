@@ -6,6 +6,8 @@ from deap import base, creator, tools
 from deap.benchmarks.tools import hypervolume
 import functools
 import numpy as np
+from itertools import combinations
+from scipy.spatial.distance import pdist
 
 # --- Helper Functions (Graph Algorithms) ---
 
@@ -186,6 +188,56 @@ def constrained_evaluate(individual, G, removable_nodes, ssource, ssink, max_rem
     # Otherwise, return actual fitness
     return evaluate(individual, G, removable_nodes, ssource, ssink)
 
+
+# --- Genotypic diversity ----
+
+
+def genotypic_diversity(population):
+    if len(population) < 2: return 0.0
+    pop_array = np.array(population, dtype=int)
+
+    distances = pdist(pop_array, metric='hamming')
+    return np.mean(distances)
+
+# --- Get visited nodes per generation ---
+
+def collapse_pop(population):
+    pop_array = np.array(population, dtype=int)
+    # Collapse: Result is 1 only if ALL are 1. If any are 0, result is 0.
+    collapsed = np.all(pop_array, axis=0).astype(int)
+    return collapsed
+
+# --- Select candidates ---
+
+def select_candidates(population,removable_nodes):
+    front = tools.sortNondominated(population, len(population), first_front_only=True)[0]
+    fitness_matrix = np.array([ind.fitness.values for ind in front])
+    mins=fitness_matrix.min(axis=0)
+    maxs=fitness_matrix.max(axis=0)
+    norm = (fitness_matrix - mins) / (maxs - mins + 1e-12) # Tiny epsilon to avoid zero divisions
+    distances = np.linalg.norm(norm,axis=1) # euclidean distance from best scenarion (origin)
+    best_index = np.argmin(distances) # get index "best" individual, the closest to the origin
+    best_balanced = front[best_index] # "Best" individual
+
+    results = {
+        "Best_balanced": best_balanced,
+        "Best_Flow":  min(front, key=lambda ind: ind.fitness.values[0]), # get best individual for Flow reduction
+        "Best_Cost": min(front, key=lambda ind: ind.fitness.values[1]), # Get individual with least removed nodes
+        "Best_Redundancy": min(front, key=lambda ind: ind.fitness.values[2]) # Get individual for Redundancy reduction
+    }
+
+    # Format into a serializable dictionary
+    fitness_keys = ['Flow','Node','Redundancy']
+    output = {}
+    for key, ind in results.items(): # populate results with fitnesses, number of removed nodes, and removed nodes
+        output[key] = {
+            "fitness": {k:float(v) for k,v in zip(fitness_keys,ind.fitness.values)}, # Convert to plain floats
+            "num_removed": int(ind.count(0)),
+            "removed_nodes": get_nodes(removable_nodes=removable_nodes, individual=ind)
+        }
+    return output, norm
+
+
 # --- MockIndividual to normalize front ---
 class MockIndividual:
     def __init__(self, values):
@@ -277,34 +329,6 @@ class GAOptimizer:
 
 
 
-    def select_candidates(self, population):
-        front = tools.sortNondominated(population, len(population), first_front_only=True)[0]
-        fitness_matrix = np.array([ind.fitness.values for ind in front])
-        mins=fitness_matrix.min(axis=0)
-        maxs=fitness_matrix.max(axis=0)
-        norm = (fitness_matrix - mins) / (maxs - mins + 1e-12) # Tiny epsilon to avoid zero divisions
-        distances = np.linalg.norm(norm,axis=1) # euclidean distance from best scenarion (origin)
-        best_index = np.argmin(distances) # get index "best" individual, the closest to the origin
-        best_balanced = front[best_index] # "Best" individual
-
-        results = {
-            "Best_balanced": best_balanced,
-            "Best_Flow":  min(front, key=lambda ind: ind.fitness.values[0]), # get best individual for Flow reduction
-            "Best_Cost": min(front, key=lambda ind: ind.fitness.values[1]), # Get individual with least removed nodes
-            "Best_Redundancy": min(front, key=lambda ind: ind.fitness.values[2]) # Get individual for Redundancy reduction
-        }
-
-        # Format into a serializable dictionary
-        fitness_keys = ['Flow','Node','Redundancy']
-        output = {}
-        for key, ind in results.items(): # populate results with fitnesses, number of removed nodes, and removed nodes
-            output[key] = {
-                "fitness": {k:float(v) for k,v in zip(fitness_keys,ind.fitness.values)}, # Convert to plain floats
-                "num_removed": int(ind.count(0)),
-                "removed_nodes": get_nodes(removable_nodes=self.removable_nodes, individual=ind)
-            }
-        return output, norm
-
     def run(self, 
             population_size=300, 
             generations=100, 
@@ -380,7 +404,14 @@ class GAOptimizer:
                 
                 if feasible_pop:
                     front = tools.sortNondominated(feasible_pop, len(feasible_pop), first_front_only=True)[0].copy()
-                    
+
+                    crowding_distances = np.array([ind.fitness.crowding_dist for ind in front], dtype=float)
+
+                    # Ignore infinities
+                    finite_cd = crowding_distances[np.isfinite(crowding_distances)]
+
+                    avg_cd = np.mean(finite_cd)
+
                     # If normalise on normalise hypervolume and use arbitrary worse case: (1.1,1.1,1.1)
                     if self.norm_hypervolume:
                         fitness_matrix = np.array([ind.fitness.values for ind in front])
@@ -417,6 +448,10 @@ class GAOptimizer:
                 # --- STATS AND LOGGING ---
                 record = stats.compile(population)
                 record['hv'] = current_hv  # Track HV in logs
+                record['cd'] = avg_cd
+                record['hd'] = genotypic_diversity(population=population)
+                record['visited_nodes'] = get_nodes(removable_nodes=self.removable_nodes,
+                                                    individual = collapse_pop(population=population))
                 logs[gen] = record
                 
                 if verbose:
@@ -431,7 +466,7 @@ class GAOptimizer:
                 pool.close()
                 pool.join()
         
-        results, norm = self.select_candidates(population=population)
+        results, norm = select_candidates(population=population,removable_nodes=self.removable_nodes)
         
         # Convert best individual (binary mask) back to node names
         
