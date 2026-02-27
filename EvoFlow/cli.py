@@ -6,7 +6,7 @@ import warnings
 from EvoFlow.biology import BioNetworkPreparer
 from EvoFlow.core import GAOptimizer, extract_active_subgraph
 from EvoFlow.visualization import plot_optimization_history, plot_node_proportions, plot_node_attribute, plot_edge_attribute, save_network
-
+from EvoFlow import utils
 
 
 
@@ -32,7 +32,7 @@ def run_evoflow(network, annotation, file, regulons, receptors_raw, mediators_ra
     preparer = BioNetworkPreparer()
     preparer.load_data(network, annotation, file, regulons)
 
-    preparer.filter_expression_data(args.label, args.celltype)
+    preparer.filter_expression_data(label, celltype)
     preparer.compute_percolation()
     preparer.build_base_network()
     
@@ -75,8 +75,8 @@ def run_evoflow(network, annotation, file, regulons, receptors_raw, mediators_ra
     
     # Run GA
     best_nodes_removed, logs = optimizer.run(
-        population_size=args.pop_size, 
-        generations=args.generations,
+        population_size=pop_size, 
+        generations=generations,
         early_stop_gen=100
     )
     

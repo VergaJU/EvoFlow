@@ -5,6 +5,8 @@ import multiprocessing
 from deap import base, creator, tools
 from deap.benchmarks.tools import hypervolume
 import functools
+import numpy as np
+
 # --- Helper Functions (Graph Algorithms) ---
 
 def find_scc(G):
@@ -126,6 +128,13 @@ def mutate(individual, indpb=0.05):
     # cleanup_individual(individual, min_remove, max_remove)
     return (individual,)
 
+
+# --- Util get nodes --
+
+def get_nodes(removable_nodes, individual):
+    return [node for i, node in enumerate(removable_nodes) if individual[i] == 0]
+
+
 # --- Evaluation Function (Must be top-level for multiprocessing) ---
 
 def evaluate(individual, G, removable_nodes, ssource, ssink):
@@ -137,7 +146,7 @@ def evaluate(individual, G, removable_nodes, ssource, ssink):
     3. Co-occurrence in SCCs
     """
     # Identify nodes to remove
-    removed_nodes_names = [node for i, node in enumerate(removable_nodes) if individual[i] == 0]
+    removed_nodes_names = get_nodes(removable_nodes, individual)
     
     # Create temp graph
     G_copy = G.copy()
@@ -214,17 +223,19 @@ class GAOptimizer:
                                                            'SuperSource',
                                                            'SuperSink'
                                                            )
-        
+        self._norm_denominator = np.array([
+            self.base_flow,
+            self.max_remove,
+            self.base_redundancy
+        ])
+
         # Handle cases where base values might be 0 to avoid DivisionByZero
         self.base_flow = max(self.base_flow, 1.0)
         self.base_redundancy = max(self.base_redundancy, 1.0)
         self.base_cost = max(self.max_remove, 1.0)
         self.N = len(self.removable_nodes)
-        if self.norm_hypervolume == False:
-            # Create arbitraty worse case (Original Flow, Max removed nodes, Original redundancy) as reference point
-            self.mock_ref = type('MockIndividual',(),{})()
-            self.mock_ref.fitness = creator.FitnessMin()
-            self.mock_ref.fitness.values = (self.base_flow, self.max_remove, self.base_redundancy)
+
+
         # DEAP Setup
         # Use a unique name for creator classes to avoid conflicts if re-instantiated
         if not hasattr(creator, "FitnessMin"):
@@ -263,21 +274,36 @@ class GAOptimizer:
 
         # change selection to NSGA for real multi-objective
         self.toolbox.register("select", tools.selNSGA2)
-        # self.toolbox.register("select", tools.selTournament, tournsize=3)
 
 
-    def normalize_fitness(self, fitness_tuple):
-            """
-            Scales fitness values to [0, 1] range.
-            Original: (Flow, Cost, Redundancy)
-            """
-            f0 = fitness_tuple[0] / self.base_flow
-            f1 = fitness_tuple[1] / self.base_cost
-            f2 = fitness_tuple[2] / self.base_redundancy
-            
-            norm_fitness_tuple = (min(f0, 1.0), min(f1, 1.0), min(f2, 1.0))
-            # Clip values to [0, 1] just in case logic results in slightly higher values
-            return norm_fitness_tuple
+
+    def select_candidates(self, population):
+        front = tools.sortNondominated(population, len(population), first_front_only=True)[0]
+        fitness_matrix = np.array([ind.fitness.values for ind in front])
+        mins=fitness_matrix.min(axis=0)
+        maxs=fitness_matrix.max(axis=0)
+        norm = (fitness_matrix - mins) / (maxs - mins + 1e-12) # Tiny epsilon to avoid zero divisions
+        distances = np.linalg.norm(norm,axis=1) # euclidean distance from best scenarion (origin)
+        best_index = np.argmin(distances) # get index "best" individual, the closest to the origin
+        best_balanced = front[best_index] # "Best" individual
+
+        results = {
+            "Best_balanced": best_balanced,
+            "Best_Flow":  min(front, key=lambda ind: ind.fitness.values[0]), # get best individual for Flow reduction
+            "Best_Cost": min(front, key=lambda ind: ind.fitness.values[1]), # Get individual with least removed nodes
+            "Best_Redundancy": min(front, key=lambda ind: ind.fitness.values[2]) # Get individual for Redundancy reduction
+        }
+
+        # Format into a serializable dictionary
+        fitness_keys = ['Flow','Node','Redundancy']
+        output = {}
+        for key, ind in results.items(): # populate results with fitnesses, number of removed nodes, and removed nodes
+            output[key] = {
+                "fitness": {k:float(v) for k,v in zip(fitness_keys,ind.fitness.values)}, # Convert to plain floats
+                "num_removed": int(ind.count(0)),
+                "removed_nodes": get_nodes(removable_nodes=self.removable_nodes, individual=ind)
+            }
+        return output, norm
 
     def run(self, 
             population_size=300, 
@@ -357,8 +383,10 @@ class GAOptimizer:
                     
                     # If normalise on normalise hypervolume and use arbitrary worse case: (1.1,1.1,1.1)
                     if self.norm_hypervolume:
+                        fitness_matrix = np.array([ind.fitness.values for ind in front])
+                        norm_matrix = fitness_matrix/self._norm_denominator
                         normalized_mock_front = []
-                        for ind in front:
+                        for ind,norm_values in zip(front,norm_matrix):
                             # Create a dummy object
                             mock_ind = type('MockIndividual', (), {})()
                             
@@ -366,16 +394,16 @@ class GAOptimizer:
                             mock_ind.fitness = creator.FitnessMin()
                             
                             # Normalize the values
-                            norm_values = self.normalize_fitness(ind.fitness.values)
+                            # norm_values = self.normalize_fitness(ind.fitness.values)
                             
                             # Setting .values automatically triggers DEAP to calculate .wvalues
-                            mock_ind.fitness.values = norm_values
+                            mock_ind.fitness.values = tuple(norm_values)
                             
                             normalized_mock_front.append(mock_ind)
         
                         current_hv = hypervolume(normalized_mock_front, ref_point) 
                     else: # use arbitrary  worse case (All Flow, Max removed nodes, Max redundancy) as reference point
-                        current_hv = hypervolume(front,self.mock_ref)
+                        current_hv = hypervolume(front,self._norm_denominator)
 
                     if current_hv > best_hv + tol:
                         best_hv = current_hv
@@ -392,11 +420,7 @@ class GAOptimizer:
                 logs[gen] = record
                 
                 if verbose:
-                    print(f"""{time.ctime()} - Gen {gen}:
-                          Flow: {record['min'][0]}, 
-                          Nodes: {record['min'][1]}, 
-                          SCCs: {record['min'][2]}. 
-                          HV: {round(record['hv'],3)}""")
+                    print(f"""{time.ctime()} - Gen {gen}: Flow: {record['min'][0]}, Nodes: {record['min'][1]}, SCCs: {record['min'][2]}. HV: {round(record['hv'],3)}""")
 
                 if generations_without_improvement >= early_stop_gen:
                     print(f"{time.ctime()} Early stopping at generation {gen} (No HV improvement).")
@@ -406,10 +430,9 @@ class GAOptimizer:
             if use_multiprocessing:
                 pool.close()
                 pool.join()
-                
-        best_ind = tools.selBest(population, 1)[0]
+        
+        results, norm = self.select_candidates(population=population)
         
         # Convert best individual (binary mask) back to node names
-        best_nodes_removed = [node for i, node in enumerate(self.removable_nodes) if best_ind[i] == 0]
         
-        return best_nodes_removed, logs, population
+        return results, logs, population, norm
