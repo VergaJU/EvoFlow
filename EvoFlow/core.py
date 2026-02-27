@@ -218,8 +218,13 @@ class GAOptimizer:
         # Handle cases where base values might be 0 to avoid DivisionByZero
         self.base_flow = max(self.base_flow, 1.0)
         self.base_redundancy = max(self.base_redundancy, 1.0)
-        self.base_cost = max(max_remove, 1.0)
+        self.base_cost = max(self.max_remove, 1.0)
         self.N = len(self.removable_nodes)
+        if self.norm_hypervolume == False:
+            # Create arbitraty worse case (Original Flow, Max removed nodes, Original redundancy) as reference point
+            self.mock_ref = type('MockIndividual',(),{})()
+            self.mock_ref.fitness = creator.FitnessMin()
+            self.mock_ref.fitness.values = (self.base_flow, self.max_remove, self.base_redundancy)
         # DEAP Setup
         # Use a unique name for creator classes to avoid conflicts if re-instantiated
         if not hasattr(creator, "FitnessMin"):
@@ -343,26 +348,21 @@ class GAOptimizer:
                 # Include parents for elitism
                 population[:] = self.toolbox.select(population + offspring, len(population))
                 
-                # Stats
-                record = stats.compile(population)
-                if verbose:
-                    print(f"Gen {gen}: {record}")
-                logs[gen] = record
                 
                 # Early Stopping
                 feasible_pop = [ind for ind in population if ind.fitness.values[0] < 1e5]
                 
                 if feasible_pop:
                     front = tools.sortNondominated(feasible_pop, len(feasible_pop), first_front_only=True)[0].copy()
-
+                    
+                    # If normalise on normalise hypervolume and use arbitrary worse case: (1.1,1.1,1.1)
                     if self.norm_hypervolume:
                         normalized_mock_front = []
                         for ind in front:
                             # Create a dummy object
                             mock_ind = type('MockIndividual', (), {})()
                             
-                            # Instantiate a REAL Fitness object of the same class you used for the GA
-                            # This will have the 'weights' and 'wvalues' logic built-in
+                            # Add fitness to mock individual
                             mock_ind.fitness = creator.FitnessMin()
                             
                             # Normalize the values
@@ -373,9 +373,9 @@ class GAOptimizer:
                             
                             normalized_mock_front.append(mock_ind)
         
-                        current_hv = hypervolume(normalized_mock_front, ref_point)
-                    else:
-                        current_hv = hypervolume(front)
+                        current_hv = hypervolume(normalized_mock_front, ref_point) 
+                    else: # use arbitrary  worse case (All Flow, Max removed nodes, Max redundancy) as reference point
+                        current_hv = hypervolume(front,self.mock_ref)
 
                     if current_hv > best_hv + tol:
                         best_hv = current_hv
@@ -392,10 +392,14 @@ class GAOptimizer:
                 logs[gen] = record
                 
                 if verbose:
-                    print(f"Gen {gen}: HV={current_hv:.4f}, {record}")
+                    print(f"""{time.ctime()} - Gen {gen}:
+                          Flow: {record['min'][0]}, 
+                          Nodes: {record['min'][1]}, 
+                          SCCs: {record['min'][2]}. 
+                          HV: {round(record['hv'],3)}""")
 
                 if generations_without_improvement >= early_stop_gen:
-                    print(f"Early stopping at generation {gen} (No HV improvement).")
+                    print(f"{time.ctime()} Early stopping at generation {gen} (No HV improvement).")
                     break
                     
         finally:
