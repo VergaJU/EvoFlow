@@ -27,23 +27,6 @@ def scc_redundancy(sccs):
             redundancy += len(scc)**2
     return redundancy
 
-# def receptor_targets_coocurrence(sccs, receptors, target_genes):
-#     """
-#     Calculates co-occurrence of receptors and target genes in SCCs.
-#     """
-#     coocurrence = 0
-#     receptors_set = set(receptors)
-#     targets_set = set(target_genes)
-    
-#     for scc in sccs:
-#         nodes = list(scc)
-#         # Find receptors and target genes in the SCC
-#         receptors_sccs = [node for node in nodes if node in receptors_set]
-#         targets_sccs = [node for node in nodes if node in targets_set]
-        
-#         # Calculate co-occurrence
-#         coocurrence += len(receptors_sccs) * len(targets_sccs)
-#     return coocurrence
 
 def calculate_flow_capacity(G, ssource, ssink):
     """
@@ -238,6 +221,70 @@ def select_candidates(population,removable_nodes):
     return output, norm
 
 
+# --- Select crowded individuals to burst rates ---
+
+def select_for_diversification(population, n):
+    """Select individuals with LOWEST crowding distance — most crowded = least diverse."""
+    front = tools.sortNondominated(population, len(population), first_front_only=True)[0]
+    # Sort by crowding distance ascending (most crowded first)
+    sorted_front = sorted(front, key=lambda ind: ind.fitness.crowding_dist)
+    return sorted_front[:n]  # Return the most crowded ones to mutate
+
+# --- Create class to handle adaptive rates ---
+
+class AdaptiveRates:
+    def __init__(self, base_cxpb, base_mtpb, base_indpb,
+                 min_cxpb=0.5, min_mtpb=0.1, min_indpb=None,
+                 max_cxpb=0.95, max_mtpb=0.8, max_indpb=None,
+                 decay=0.99,
+                 stagnation_trigger=5):
+
+        self.base_cxpb  = base_cxpb
+        self.base_mtpb  = base_mtpb
+        self.base_indpb = base_indpb
+
+        self.min_cxpb  = min_cxpb
+        self.min_mtpb  = min_mtpb
+        self.min_indpb = min_indpb or base_indpb * 0.5
+
+        self.max_cxpb  = max_cxpb
+        self.max_mtpb  = max_mtpb
+        self.max_indpb = max_indpb or min(base_indpb * 5, 0.5)
+
+        self.decay = decay
+        self.stagnation_trigger = stagnation_trigger
+
+        self.cxpb  = base_cxpb
+        self.mtpb  = base_mtpb
+        self.indpb = base_indpb
+        
+        self.burst_active = False  # flag for run() to know if it should diversify
+
+    def step(self, generations_without_improvement):
+        
+        at_minimum = (
+            abs(self.cxpb  - self.min_cxpb)  < 1e-4 and
+            abs(self.mtpb  - self.min_mtpb)  < 1e-4 and
+            abs(self.indpb - self.min_indpb) < 1e-4
+        )
+
+        if at_minimum and generations_without_improvement >= self.stagnation_trigger:
+            # Spike rates back to base and flag burst
+            self.reset_to_base()
+            self.burst_active = True
+        else:
+            # Normal decay
+            self.burst_active = False
+            self.cxpb  = max(self.min_cxpb,  self.cxpb  * self.decay)
+            self.mtpb  = max(self.min_mtpb,  self.mtpb  * self.decay)
+            self.indpb = max(self.min_indpb, self.indpb * self.decay)
+
+    def reset_to_base(self):
+        self.cxpb  = self.base_cxpb
+        self.mtpb  = self.base_mtpb
+        self.indpb = self.base_indpb
+
+
 # --- MockIndividual to normalize front ---
 class MockIndividual:
     def __init__(self, values):
@@ -254,7 +301,12 @@ class GAOptimizer:
                  min_remove = 1,
                  constrained=False,
                  repair = False,
-                 norm_hypervolume = False):
+                 norm_hypervolume = False,
+                 dynamic = False,
+                 base_cxpb = 0.9, # Start mating 90% of the population
+                 base_mtpb = 0.3, # Start mutating 30% of the population
+                 base_indpb = 3 # Start with a probability of mutating 3 bits per muated individual
+    ):
         self.G = G
         self.sources = sources
         self.sinks = sinks
@@ -262,10 +314,12 @@ class GAOptimizer:
         self.max_remove=max_remove
         self.constrained = constrained
         self.repair = repair
+        self.dynamic = dynamic
         self.norm_hypervolume = norm_hypervolume
         # Determine removable nodes (All nodes except Sources and Sinks)
         self.removable_nodes = list(set(set(G.nodes) - set(sources)) - set(sinks))
         
+
         # Determine max flow and SCC:
         # Calculate Baselines for Normalization
         # Use the original graph (0 nodes removed) as the "Max" reference
@@ -287,6 +341,11 @@ class GAOptimizer:
         self.base_cost = max(self.max_remove, 1.0)
         self.N = len(self.removable_nodes)
 
+        # Define initial rates
+
+        self.base_cxpb = base_cxpb
+        self.base_mtpb = base_mtpb
+        self.base_indpb = base_indpb/self.N
 
         # DEAP Setup
         # Use a unique name for creator classes to avoid conflicts if re-instantiated
@@ -320,7 +379,7 @@ class GAOptimizer:
                                 ssink='SuperSink')
 
         self.toolbox.register("mate", tools.cxUniform, indpb=0.5)
-        self.toolbox.register("mutate", mutate, indpb=1.0/self.N)
+        self.toolbox.register("mutate", tools.mutFlipBit)
         
         self.toolbox.register("repair", repair_individual, min_remove=self.min_remove, max_remove=self.max_remove)
 
@@ -335,10 +394,19 @@ class GAOptimizer:
             early_stop_gen=10, 
             tol=1e-6, 
             use_multiprocessing=True,
-            verbose=False):
+            verbose=False
+            ):
         """
         Runs the Genetic Algorithm.
         """
+        stagnation_trigger = early_stop_gen//10
+        rates = AdaptiveRates(
+            base_cxpb=self.base_cxpb,
+            base_mtpb=self.base_mtpb,
+            base_indpb=self.base_indpb,
+            stagnation_trigger=stagnation_trigger
+        )
+
         if use_multiprocessing:
             pool = multiprocessing.Pool()
             self.toolbox.register("map", pool.map)
@@ -354,9 +422,7 @@ class GAOptimizer:
                 ind.fitness.values = fit
                 
             stats = tools.Statistics(lambda ind: ind.fitness.values)
-            # stats.register("avg", lambda x: sum([i[0] for i in x]) / len(x))
             stats.register("min", min)
-            # stats.register("max", max)
             ref_point = (1.1, 1.1, 1.1) 
             best_hv = 0.0
 
@@ -372,17 +438,31 @@ class GAOptimizer:
                 
                 # Crossover
                 for child1, child2 in zip(offspring[::2], offspring[1::2]):
-                    if random.random() < 0.9:
+                    if random.random() < rates.cxpb: # call updated rates
                         self.toolbox.mate(child1, child2)
                         del child1.fitness.values
                         del child2.fitness.values
 
                 # Mutation
                 for mutant in offspring:
-                    if random.random() < 0.3:
-                        self.toolbox.mutate(mutant)
+                    if random.random() < rates.mtpb: 
+                        self.toolbox.mutate(mutant, indpb=rates.indpb)
                         del mutant.fitness.values
     
+                if self.dynamic:
+                    if rates.burst_active:
+                        crowded = select_for_diversification(
+                            population=population,
+                            n=len(population) // 5
+                        )
+                        for ind in crowded:
+                            clone = self.toolbox.clone(ind)
+                            tools.mutFlipBit(clone, indpb=rates.indpb)  # rates already reset to base
+                            del clone.fitness.values
+                            self.toolbox.repair(clone)
+                            offspring.append(clone)
+
+
                 # is repair is set as True, then repair not viable individuals
                 if self.repair:
                     for mutant in offspring:
@@ -445,13 +525,21 @@ class GAOptimizer:
                     # If no feasible individuals yet, we don't increment/decrement early stopping
                     current_hv = 0.0
 
+                if self.dynamic:
+                    rates.step(generations_without_improvement)
+
                 # --- STATS AND LOGGING ---
-                record = stats.compile(population)
+                fitness_keys = ['Flow','Node','Redundancy']
+
+                record = {k:v for k,v in zip(fitness_keys,stats.compile(population)['min'])}
                 record['hv'] = current_hv  # Track HV in logs
                 record['cd'] = avg_cd
                 record['hd'] = genotypic_diversity(population=population)
                 record['visited_nodes'] = get_nodes(removable_nodes=self.removable_nodes,
                                                     individual = collapse_pop(population=population))
+                record['cxpb'] = rates.cxpb
+                record['mtpb'] = rates.mtpb
+                record['indpb'] = rates.indpb
                 logs[gen] = record
                 
                 if verbose:
