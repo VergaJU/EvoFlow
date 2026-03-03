@@ -238,7 +238,8 @@ class AdaptiveRates:
                  min_cxpb=0.5, min_mtpb=0.1, min_indpb=None,
                  max_cxpb=0.95, max_mtpb=0.8, max_indpb=None,
                  decay=0.99,
-                 stagnation_trigger=5):
+                 stagnation_trigger=5,
+                 reheat_attenuation=0.7): # <--- New: how much the "spike" weakens each time
 
         self.base_cxpb  = base_cxpb
         self.base_mtpb  = base_mtpb
@@ -254,15 +255,18 @@ class AdaptiveRates:
 
         self.decay = decay
         self.stagnation_trigger = stagnation_trigger
+        self.reheat_attenuation = reheat_attenuation
+        
+        # This keeps track of our current "ceiling"
+        self.current_reheat_factor = 1.0 
 
         self.cxpb  = base_cxpb
         self.mtpb  = base_mtpb
         self.indpb = base_indpb
         
-        self.burst_active = False  # flag for run() to know if it should diversify
+        self.burst_active = False
 
     def step(self, generations_without_improvement):
-        
         at_minimum = (
             abs(self.cxpb  - self.min_cxpb)  < 1e-4 and
             abs(self.mtpb  - self.min_mtpb)  < 1e-4 and
@@ -270,20 +274,28 @@ class AdaptiveRates:
         )
 
         if at_minimum and generations_without_improvement >= self.stagnation_trigger:
-            # Spike rates back to base and flag burst
-            self.reset_to_base()
+            self.reheat()
             self.burst_active = True
         else:
-            # Normal decay
             self.burst_active = False
+            # Normal exponential decay toward minimums
             self.cxpb  = max(self.min_cxpb,  self.cxpb  * self.decay)
             self.mtpb  = max(self.min_mtpb,  self.mtpb  * self.decay)
             self.indpb = max(self.min_indpb, self.indpb * self.decay)
 
-    def reset_to_base(self):
-        self.cxpb  = self.base_cxpb
-        self.mtpb  = self.base_mtpb
-        self.indpb = self.base_indpb
+    def reheat(self):
+        """
+        Implementation of Adaptive Reheating:
+        Every time we reheat, the peak is lower than the previous peak.
+        """
+        # 1. Lower the 'energy' for this next cycle
+        self.current_reheat_factor *= self.reheat_attenuation
+        
+        # 2. Calculate the new peak relative to the range [Min, Base]
+        # This ensures we always stay above the minimum but spike less each time.
+        self.cxpb = self.min_cxpb + (self.base_cxpb - self.min_cxpb) * self.current_reheat_factor
+        self.mtpb = self.min_mtpb + (self.base_mtpb - self.min_mtpb) * self.current_reheat_factor
+        self.indpb = self.min_indpb + (self.base_indpb - self.min_indpb) * self.current_reheat_factor
 
 
 # --- MockIndividual to normalize front ---
