@@ -230,6 +230,7 @@ def select_for_diversification(population, n):
     sorted_front = sorted(front, key=lambda ind: ind.fitness.crowding_dist)
     return sorted_front[:n]  # Return the most crowded ones to mutate
 
+
 # --- Create class to handle adaptive rates ---
 
 class AdaptiveRates:
@@ -299,7 +300,7 @@ class GAOptimizer:
                  sinks, 
                  max_remove = 10, 
                  min_remove = 1,
-                 constrained=False,
+                 delta_penalty=False,
                  repair = False,
                  norm_hypervolume = False,
                  dynamic = False,
@@ -312,10 +313,17 @@ class GAOptimizer:
         self.sinks = sinks
         self.min_remove = min_remove
         self.max_remove=max_remove
-        self.constrained = constrained
+        self.delta_penalty = delta_penalty
         self.repair = repair
         self.dynamic = dynamic
         self.norm_hypervolume = norm_hypervolume
+
+        if (self.dynamic and not self.repair):
+            print("""
+Dynamic mutation rates will introduce higher number of removed nodes, if the repair system is not set as True, it will lead to several individuals not respecting the constrains.
+Consider setting repair=True 
+""")
+
         # Determine removable nodes (All nodes except Sources and Sinks)
         self.removable_nodes = list(set(set(G.nodes) - set(sources)) - set(sinks))
         
@@ -364,7 +372,7 @@ class GAOptimizer:
         self.toolbox.register("population", tools.initRepeat, list, self.toolbox.individual)
         
 
-        if self.constrained:
+        if self.delta_penalty:
             self.toolbox.register("evaluate", constrained_evaluate, 
                                 G=self.G, 
                                 removable_nodes=self.removable_nodes, 
