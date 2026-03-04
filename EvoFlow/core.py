@@ -318,7 +318,8 @@ class GAOptimizer:
                  dynamic = False,
                  base_cxpb = 0.9, # Start mating 90% of the population
                  base_mtpb = 0.3, # Start mutating 30% of the population
-                 base_indpb = 3 # Start with a probability of mutating 3 bits per muated individual
+                 base_indpb = 3, # Start with a probability of mutating 3 bits per muated individual
+                 **kwargs
     ):
         self.G = G
         self.sources = sources
@@ -414,7 +415,8 @@ Consider setting repair=True
             early_stop_gen=10, 
             tol=1e-6, 
             use_multiprocessing=True,
-            verbose=False
+            verbose=False,
+            **kwargs
             ):
         """
         Runs the Genetic Algorithm.

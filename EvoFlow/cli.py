@@ -11,8 +11,19 @@ from EvoFlow import utils
 
 
 
-def run_evoflow(network, annotation, file, regulons, receptors_raw, mediators_raw, 
-                ligands_file, label, celltype, generations=10000, pop_size=1000):
+def run_evoflow(network,
+                annotation,
+                file,
+                regulons,
+                receptors_raw,
+                mediators_raw, 
+                ligands_file,
+                label,
+                celltype,
+                generations=10000,
+                population_size=1000,
+                return_results=False,
+                **kwargs):
     """
     This function contains all your logic and can be called from other scripts.
     """
@@ -44,8 +55,9 @@ def run_evoflow(network, annotation, file, regulons, receptors_raw, mediators_ra
     
     # Visualization (Pre-optimization)
     plot_node_proportions(preparer.annotation, filename_prefix)
-    plot_node_attribute(preparer.G, filename_prefix, attribute='weight', show=False)
+    plot_node_attribute(preparer.G, filename_prefix, attribute='percolation', show=False)
     plot_edge_attribute(preparer.G, filename_prefix, 'capacity', show=False)
+    plot_edge_attribute(preparer.G, filename_prefix, 'weight', show=False)
     # Prepare Topology (Add SuperSource/Sink)
     sources, sinks = preparer.prepare_flow_topology(ligands, target_genes)
     
@@ -71,19 +83,22 @@ def run_evoflow(network, annotation, file, regulons, receptors_raw, mediators_ra
     # --- Optimization Phase ---
     print(f"{time.ctime()} - Initializing Genetic Algorithm")
     
-    optimizer = GAOptimizer(SG, sources, sinks, receptors, target_genes)
+    optimizer = GAOptimizer(G=SG, 
+                            sources=sources, 
+                            sinks=sinks,**kwargs)
     
     # Run GA
-    best_nodes_removed, logs = optimizer.run(
-        population_size=pop_size, 
-        generations=generations,
-        early_stop_gen=100
-    )
+    best_nodes_removed, logs, pop, norm= optimizer.run(
+        population_size=population_size, 
+        generations=generations, **kwargs)
     
     # --- Results ---
     # Save Best Candidates
-    pd.DataFrame(best_nodes_removed).to_csv(filename_prefix + "best_candidates.csv", header=False, index=False)
-    
+    utils.save_to_json(data=best_nodes_removed,filename=filename_prefix + "_ga_results.json")
+    utils.save_to_yaml(data=best_nodes_removed,filename=filename_prefix + "_ga_results.yaml")
+    utils.save_norm(norm=norm,filename=filename_prefix + "_norm.tsv")
+    utils.save_population(population=pop,filename=filename_prefix + "_population.pkl")
+    utils.save_logs(logs=logs,filename=filename_prefix + "_logs.pkl")
     # Plot History
     plot_optimization_history(logs, filename_prefix)
     
@@ -93,6 +108,8 @@ def run_evoflow(network, annotation, file, regulons, receptors_raw, mediators_ra
     save_network(Final_G, filename_prefix)
     
     print(f"{time.ctime()} - Optimization Complete.")
+    if return_results:
+        return best_nodes_removed, logs, pop, norm
     return filename_prefix # Or return the Final_G if you want to use it in Python
 
 
@@ -111,7 +128,12 @@ def main():
     parser.add_argument("-c", "--celltype", required=True)
     parser.add_argument("--generations", type=int, default=10000)
     parser.add_argument("--pop_size", type=int, default=1000)
-
+    parser.add_argument("--early_stop", type=int, default=100)
+    parser.add_argument("--delta_penalty", type=bool, default=False)
+    parser.add_argument("--repair", type=bool, default=True)
+    parser.add_argument("--norm_hypervolume", type=bool, default=False)
+    parser.add_argument("--dynamic_rates", type=bool, default=True)
+    
     args = parser.parse_args()
     
     # Call the new function using arguments from the CLI
