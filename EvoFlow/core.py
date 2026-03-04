@@ -4,9 +4,7 @@ import networkx as nx
 import multiprocessing
 from deap import base, creator, tools
 from deap.benchmarks.tools import hypervolume
-import functools
 import numpy as np
-from itertools import combinations
 from scipy.spatial.distance import pdist
 
 # --- Helper Functions (Graph Algorithms) ---
@@ -289,7 +287,6 @@ class AdaptiveRates:
         stagnation_trigger=5,
         reheat_attenuation=0.7,
     ):  # <--- New: how much the "spike" weakens each time
-
         self.base_cxpb = base_cxpb
         self.base_mtpb = base_mtpb
         self.base_indpb = base_indpb

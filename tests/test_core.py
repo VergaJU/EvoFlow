@@ -1,5 +1,3 @@
-import pytest
-import networkx as nx
 from EvoFlow.core import (
     calculate_flow_capacity,
     extract_active_subgraph,

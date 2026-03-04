@@ -1,12 +1,8 @@
-import pytest
-import networkx as nx
-import random
 from EvoFlow.core import (
     AdaptiveRates,
     constrained_evaluate,
     select_for_diversification,
     GAOptimizer,
-    evaluate,
 )
 from deap import base, creator
 

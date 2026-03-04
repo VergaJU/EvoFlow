@@ -3,7 +3,6 @@ import numpy as np
 import networkx as nx
 import scanpy as sc
 import scipy as sp
-import os
 import time
 
 
@@ -182,7 +181,6 @@ class BioNetworkPreparer:
         dummy_source_edges = []
 
         dummy_sinks = []
-        dummy_sources = []
 
         for node in sinks:
             if node in self.G:  # Only add if node exists in graph
