@@ -146,7 +146,8 @@ def test_prepare_flow_topology():
     # SuperSource should connect to B (Receptor neighbor of A)
     # A -> B. A is ligand. Neighbors of A is B. B is Receptor.
     # So SuperSource -> B
-    assert G.has_edge('SuperSource', 'B')
+    assert G.has_edge('dummy_B', 'B')
+    assert G.has_edge('SuperSource', 'dummy_B')
     
     # Check SuperSink
     assert 'SuperSink' in G.nodes

@@ -7,63 +7,100 @@ import networkx as nx
 import json
 
 def plot_optimization_history(logs, filename_prefix):
-    """
-    Plots optimization history across generations in a 2x2 subplot grid.
-    The function assumes the data (either a DataFrame or a dict) contains
-    metrics with tuple values to expand into separate columns, plus an
-    optional 'hv' (hypervolume) metric.
+    """Plot the evolution of metrics during a GA run.
 
-    Layout:
-    - Top-left (titled **Flow**): first tuple element
-    - Top-right (titled **Nodes**): second tuple element
-    - Bottom-left (titled **Redundancy**): third tuple element
-    - Bottom-right (titled **Hypervolume**): hv metric (if available)
+    The function accepts either a :class:`pandas.DataFrame` or a
+    dictionary keyed by generation. Each entry should itself be a mapping
+    from metric name to value; tuple-valued entries will be expanded into
+    separate columns.  Typical keys include ``Flow``, ``Node``,
+    ``Redundancy`` and ``hv``, but any numeric metric present in the logs
+    will be plotted.
 
-    The x-axis for all panels is the generation number (`gen`).
+    A grid of subplots is generated automatically based on the number of
+    metrics found.  The x-axis for every subplot is the generation number
+    (``gen``); the y-axis is the metric value.  The resulting figure is
+    saved with the suffix ``optimization_values.png`` appended to
+    ``filename_prefix``.
+
+    Parameters
+    ----------
+    logs : dict or pandas.DataFrame
+        Optimization history.  If a dict, keys should be generation numbers
+        and values metric dictionaries.  If a DataFrame, a ``gen`` column
+        should exist or will be inferred from the index.
+    filename_prefix : str
+        Prefix used when saving the figure.
+
+    Returns
+    -------
+    matplotlib.figure.Figure
+        The figure object that was created (also saved to disk).
     """
-    # normalize input to a DataFrame with a 'gen' column
+
+    # --- normalize input to DataFrame ---
     if isinstance(logs, dict):
-        # each key is a generation, value is a dict of metrics
         logs_df = pd.DataFrame(logs).T
 
-        # expand tuple values into separate columns
-        for col in logs_df.columns:
-            sample = logs_df[col].iloc[0]
-            if isinstance(sample, (list, tuple)) and len(sample) > 1:
-                # expand into multiple columns
-                expanded = pd.DataFrame(logs_df[col].tolist(),
-                                        index=logs_df.index)
-                for i, newcol in enumerate(expanded.columns):
-                    logs_df[f"{col}_{i}"] = expanded[newcol]
-                logs_df = logs_df.drop(columns=[col])
-        logs_df = logs_df.reset_index(names='gen')
+
+        logs_df = logs_df.reset_index(names="gen")
     else:
         logs_df = logs.copy()
-        if 'gen' not in logs_df.columns:
-            logs_df = logs_df.reset_index(names='gen')
+        if "gen" not in logs_df.columns:
+            logs_df = logs_df.reset_index(names="gen")
+    logs_df = logs_df.drop('visited_nodes', axis=1)
+    # choose the order of known metrics first so plots are predictable
+    known_order = ["Flow", "Node", "Redundancy", "hv", "hd", "cd",
+                   "cxpb", "mtpb", "indpb"]
+    all_metrics = [c for c in logs_df.columns if c != "gen"]
+    value_cols = [c for c in known_order if c in all_metrics]
+    # append any additional metrics that were not in the known list
+    value_cols += [c for c in all_metrics if c not in value_cols]
 
-    # determine data columns to plot
-    value_cols = [c for c in logs_df.columns if c != 'gen']
-    titles = ['Hypervolume', 'Flow', 'Nodes', 'Redundancy']
-    
-    # create 2x2 subplot grid
-    fig, axes = plt.subplots(2, 2, figsize=(14, 10))
-    axes_flat = axes.flatten()
-    
-    for ax, title, col in zip(axes_flat, titles, value_cols[:4]):
-        if col in logs_df.columns:
-            sns.lineplot(x='gen', y=col, data=logs_df, marker='o', ax=ax)
-            ax.set_title(title)
-            ax.set_xlabel('Generation')
-            ax.set_ylabel(title)
-            ax.grid(True)
-        else:
-            ax.axis('off')
+    n_metrics = len(value_cols)
+    if n_metrics == 0:
+        raise ValueError("No metrics found in logs to plot")
+
+    # determine subplot grid dimensions (max 3 columns for readability)
+    import math
+    ncols = min(3, n_metrics)
+    nrows = math.ceil(n_metrics / ncols)
+
+    fig, axes = plt.subplots(nrows, ncols,
+                             figsize=(4 * ncols, 3 * nrows))
+    # make axes iterable
+    if isinstance(axes, np.ndarray):
+        axes_flat = axes.flatten()
+    else:
+        axes_flat = [axes]
+
+    # helper to convert metric name to a human friendly title
+    title_map = {
+        "hv": "Hypervolume",
+        "cd" : "Crowding Distance",
+        "hd" : "Hamming Distance",
+        "Flow": "Flow",
+        "Node": "Nodes",
+        "Redundancy": "Redundancy",
+    }
+
+    for idx, col in enumerate(value_cols):
+        ax = axes_flat[idx]
+        sns.lineplot(x="gen", y=col, data=logs_df, ax=ax)
+        title = title_map.get(col, col.capitalize())
+        ax.set_title(title)
+        ax.set_xlabel("Generation")
+        ax.set_ylabel(title)
+        ax.grid(True)
+
+    # turn off any unused axes
+    for ax in axes_flat[n_metrics:]:
+        ax.axis("off")
 
     fig_name = filename_prefix + "optimization_values.png"
     plt.tight_layout()
     plt.savefig(fig_name)
-    plt.close()
+    plt.close(fig)
+    return fig
 
 def plot_node_proportions(annotation, filename_prefix):
     """

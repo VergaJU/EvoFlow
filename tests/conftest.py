@@ -14,7 +14,7 @@ def mock_net_df():
         'start': ['A', 'B', 'C', 'D'],
         'to': ['B', 'C', 'D', 'E'],
         'weight': [1.0, 0.8, 0.5, 0.9],
-        'edge_type': ['activation', 'inhibition', 'activation', 'activation']
+        'layer': ['activation', 'inhibition', 'activation', 'activation']
     }
     return pd.DataFrame(data)
 

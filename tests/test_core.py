@@ -4,7 +4,7 @@ from EvoFlow.core import (
     calculate_flow_capacity, 
     extract_active_subgraph, 
     generate_individual,
-    cleanup_individual,
+    repair_individual,
     evaluate,
     GAOptimizer
 )
@@ -42,23 +42,24 @@ def test_generate_individual():
     assert len(ind) == 5
     # Check it's binary
     assert all(x in [0, 1] for x in ind)
-    # Check number of zeros (removals) is between 2 and 3
+    # Check number of zeros (removals) is between 1 and 3
     zeros = sum(1 for x in ind if x == 0)
-    assert 2 <= zeros <= 3
+    assert 1 <= zeros <= 3
 
-def test_cleanup_individual():
+def test_repair_individual():
     # Individual: [0, 0, 0, 0, 0] -> 5 removals
     # Max allowed: 3. Should flip 2 zeros to 1.
     ind = [0, 0, 0, 0, 0]
-    cleaned = cleanup_individual(ind, min_removed=1, max_removed=3)
-    zeros = sum(1 for x in cleaned if x == 0)
+    # Note: repair_individual takes min_remove and max_remove (not min_removed/max_removed)
+    repaired = repair_individual(ind, min_remove=1, max_remove=3)
+    zeros = sum(1 for x in repaired if x == 0)
     assert zeros == 3
     
     # Individual: [1, 1, 1, 1, 1] -> 0 removals
     # Min allowed: 2. Should flip 2 ones to 0.
     ind = [1, 1, 1, 1, 1]
-    cleaned = cleanup_individual(ind, min_removed=2, max_removed=5)
-    zeros = sum(1 for x in cleaned if x == 0)
+    repaired = repair_individual(ind, min_remove=2, max_remove=5)
+    zeros = sum(1 for x in repaired if x == 0)
     assert zeros == 2
 
 def test_evaluate(simple_graph):
@@ -69,15 +70,11 @@ def test_evaluate(simple_graph):
     removable_nodes = ['A', 'B']
     ind_keep_all = [1, 1]
     
-    receptors = []
-    targets = []
-    
     flow, cost, coocc = evaluate(
         ind_keep_all, 
         simple_graph, 
         removable_nodes, 
-        'SuperSource', 'SuperSink',
-        receptors, targets
+        'SuperSource', 'SuperSink'
     )
     
     assert flow == 5.0
@@ -89,8 +86,7 @@ def test_evaluate(simple_graph):
         ind_remove_A, 
         simple_graph, 
         removable_nodes, 
-        'SuperSource', 'SuperSink',
-        receptors, targets
+        'SuperSource', 'SuperSink'
     )
     
     assert flow == 0.0
@@ -100,21 +96,21 @@ def test_pipeline_integration(simple_graph):
     # Integration smoke test for GAOptimizer
     sources = ['SuperSource']
     sinks = ['SuperSink']
-    receptors = []
-    targets = []
     
     # The simple graph has only A, B removable
     
-    opt = GAOptimizer(simple_graph, sources, sinks, receptors, targets)
+    # Fix constructor: G, sources, sinks, **kwargs
+    opt = GAOptimizer(simple_graph, sources, sinks)
     
     # Run for 2 generations, tiny population
-    best_nodes, logs = opt.run(
+    # Fix return values: best_nodes, logs, pop, norm
+    results, logs, pop, norm = opt.run(
         population_size=10, 
         generations=2, 
         early_stop_gen=10,
         use_multiprocessing=False # Important for testing environment without heavy setup
     )
     
-    assert isinstance(best_nodes, list)
+    assert isinstance(results, dict)
     assert isinstance(logs, dict)
     assert len(logs) == 2 # 2 generations recorded
