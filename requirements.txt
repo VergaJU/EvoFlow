@@ -1,5 +1,7 @@
 pytest
 pytest-mock
+ruff
+pre-commit
 numpy
 pandas
 networkx
