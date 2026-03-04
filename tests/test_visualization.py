@@ -19,7 +19,7 @@ def _make_sample_logs():
             "cxpb": 0.5,
             "mtpb": 0.6,
             "indpb": 0.7,
-            "visited_nodes": ['a','b','c']
+            "visited_nodes": ["a", "b", "c"],
         },
         1: {
             "Flow": np.float64(1.1),
@@ -31,7 +31,7 @@ def _make_sample_logs():
             "cxpb": 0.55,
             "mtpb": 0.65,
             "indpb": 0.75,
-            "visited_nodes": ['d','e','f']
+            "visited_nodes": ["d", "e", "f"],
         },
     }
 
