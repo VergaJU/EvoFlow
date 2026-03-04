@@ -1,6 +1,6 @@
 # EvoFlow
 
-![Passed tests](https://github.com/github/docs/actions/workflows/ci.yml/badge.svg)
+![Passed tests](https://github.com/VergaJU/EvoFlow/actions/workflows/ci.yml/badge.svg)
 
 EvoFlow is a Python-based tool designed for biological network analysis and optimization. It combines graph theory (MaxFlow min-cut) with Genetic Algorithms (GA) to identify critical nodes in gene regulatory networks.
 
