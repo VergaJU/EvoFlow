@@ -1,4 +1,3 @@
-import scipy as sp
 import pandas as pd
 import networkx as nx
 from unittest.mock import patch
@@ -9,7 +8,7 @@ def test_initialization():
     prep = BioNetworkPreparer()
     assert prep.G is None
     assert prep.annotation is None
-    assert prep.adata is None
+    assert prep.expression is None
 
 
 def test_load_data(mock_net_df, mock_annotation, mock_anndata):
@@ -36,13 +35,13 @@ def test_load_data(mock_net_df, mock_annotation, mock_anndata):
 
             assert prep.net_df is not None
             assert prep.annotation is not None
-            assert prep.adata is not None
+            assert prep.expression is not None
 
 
 def test_percolation_logic(mock_annotation, mock_anndata):
     prep = BioNetworkPreparer()
     prep.annotation = mock_annotation
-    prep.adata = mock_anndata
+    prep.expression = mock_anndata
 
     # Manually setting up a scenario:
     # 3 "Type X" cells.
@@ -68,9 +67,6 @@ def test_percolation_logic(mock_annotation, mock_anndata):
     # Injecting prepared data into the method logic:
     # The method uses: sp.sparse.csr_matrix.todense(self.adata.X)
 
-    prep.adata.X = sp.sparse.csr_matrix([[1, 1], [1, 0]])
-    prep.adata.var_names = ["A", "B"]
-
     # Logic in method:
     # df = [2, 1] (sum)
     # min=1, max=2
@@ -79,7 +75,9 @@ def test_percolation_logic(mock_annotation, mock_anndata):
     # B: 1 -> 0.0
 
     # Mock annotation to match keys
-    prep.annotation = pd.Series(["type"] * 2, index=["A", "B"])
+    prep.annotation = pd.Series(
+        ["type"] * len(prep.expression.var_names), index=prep.expression.var_names
+    )
 
     percolation = prep.compute_percolation()
 
@@ -123,7 +121,7 @@ def test_update_capacities_multiplicative():
     assert G.edges["A", "B"]["capacity"] == 7.5
 
 
-def test_prepare_flow_topology():
+def test_prepare_bioflow_topology():
     prep = BioNetworkPreparer()
     G = nx.DiGraph()
     # A(Ligand) -> B(Receptor) -> C -> D(Target)
@@ -141,7 +139,7 @@ def test_prepare_flow_topology():
     ligands = ["A"]
     targets = ["D"]
 
-    sources, sinks = prep.prepare_flow_topology(ligands, targets)
+    sources, sinks = prep.prepare_bioflow_topology(ligands, targets)
 
     # Check SuperSource
     assert "SuperSource" in G.nodes
@@ -163,3 +161,41 @@ def test_prepare_flow_topology():
     assert "dummy_D" in G.nodes
     assert G.has_edge("D", "dummy_D")
     assert G.has_edge("dummy_D", "SuperSink")
+
+
+def test_prepare_flow_topology():
+    from EvoFlow.preparer import prepare_flow_topology
+
+    G = nx.DiGraph()
+    # Add some nodes and edges with capacities
+    G.add_nodes_from(["A", "B", "C", "D"])
+    G.add_edges_from(
+        [
+            ("A", "B", {"capacity": 1.0}),
+            ("B", "C", {"capacity": 2.0}),
+            ("C", "D", {"capacity": 1.5}),
+        ]
+    )
+
+    source_nodes = ["A"]
+    sink_nodes = ["D"]
+
+    sources, sinks = prepare_flow_topology(G, source_nodes, sink_nodes)
+
+    # Check SuperSource and SuperSink added
+    assert "SuperSource" in G.nodes
+    assert "SuperSink" in G.nodes
+
+    # Check dummy nodes
+    assert "dummy_A" in G.nodes
+    assert "dummy_D" in G.nodes
+
+    # Check edges
+    assert G.has_edge("SuperSource", "dummy_A")
+    assert G.has_edge("dummy_A", "A")
+    assert G.has_edge("D", "dummy_D")
+    assert G.has_edge("dummy_D", "SuperSink")
+
+    # Check sources and sinks lists
+    assert sources == ["SuperSource", "dummy_A"]
+    assert sinks == ["dummy_D", "SuperSink"]

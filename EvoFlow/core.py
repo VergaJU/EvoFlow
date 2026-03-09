@@ -126,7 +126,7 @@ def get_nodes(removable_nodes, individual):
 # --- Evaluation Function (Must be top-level for multiprocessing) ---
 
 
-def evaluate(individual, G, removable_nodes, ssource, ssink):
+def evaluate(individual, G, removable_nodes, ssource, ssink, shared_cache):
     """
     Fitness Function.
     Objectives (minimized):
@@ -135,22 +135,36 @@ def evaluate(individual, G, removable_nodes, ssource, ssink):
     3. Co-occurrence in SCCs
     """
     # Identify nodes to remove
-    removed_nodes_names = get_nodes(removable_nodes, individual)
+    removed_nodes_names = set(get_nodes(removable_nodes, individual))
 
-    # Create temp graph
-    G_copy = G.copy()
-    G_copy.remove_nodes_from(removed_nodes_names)
+    # --- CACHE CHECK ---
+    cache_key = frozenset(removed_nodes_names)
+    if cache_key in shared_cache:
+        return shared_cache[cache_key]  # Returns all 3 objectives instantly!
 
+    # --- GRAPH CREATION ---
+    nodes_to_keep = [n for n in G.nodes if n not in removed_nodes_names]
+    G_sub = G.subgraph(nodes_to_keep)
+
+    # --- EVALUATION ---
     # 1. Flow Capacity
-    flow_value = calculate_flow_capacity(G_copy, ssource, ssink)
+    try:
+        flow_value = nx.maximum_flow_value(G_sub, ssource, ssink, capacity="capacity")
+    except Exception:
+        flow_value = 0
 
     # 2. SCC Co-occurrence
-    sccs = find_scc(G_copy)
+    sccs = find_scc(G_sub)
     redundancy = scc_redundancy(sccs=sccs)
+
     # 3. Cost (Number of nodes removed)
     cost = len(removed_nodes_names)
 
-    return flow_value, cost, redundancy
+    # --- SAVE TO CACHE ---
+    result = (flow_value, cost, redundancy)
+    shared_cache[cache_key] = result
+
+    return result
 
 
 # --- Constraint Helpers ---
@@ -166,7 +180,9 @@ def penalty_distance(individual, max_remove):
     return float((individual.count(0) - max_remove) ** 2)
 
 
-def constrained_evaluate(individual, G, removable_nodes, ssource, ssink, max_remove):
+def constrained_evaluate(
+    individual, G, removable_nodes, ssource, ssink, max_remove, shared_cache
+):
     """
     A manual wrapper that mimics DeltaPenalty but is picklable.
     """
@@ -177,7 +193,7 @@ def constrained_evaluate(individual, G, removable_nodes, ssource, ssink, max_rem
         return tuple(p + dist for p in penalty_base)
 
     # Otherwise, return actual fitness
-    return evaluate(individual, G, removable_nodes, ssource, ssink)
+    return evaluate(individual, G, removable_nodes, ssource, ssink, shared_cache)
 
 
 # --- Genotypic diversity ----
@@ -378,6 +394,8 @@ class GAOptimizer:
         base_cxpb=0.9,  # Start mating 90% of the population
         base_mtpb=0.3,  # Start mutating 30% of the population
         base_indpb=3,  # Start with a probability of mutating 3 bits per muated individual
+        use_multiprocessing=True,
+        verbose=False,
         **kwargs,
     ):
         self.G = G
@@ -389,45 +407,47 @@ class GAOptimizer:
         self.repair = repair
         self.dynamic = dynamic
         self.norm_hypervolume = norm_hypervolume
+        self.use_multiprocessing = (
+            use_multiprocessing  # FIX 1: Fixed typo 'use_multiptocessing'
+        )
+        self.verbose = verbose
 
         if self.dynamic and not self.repair:
-            print("""
-Dynamic mutation rates will introduce higher number of removed nodes, if the repair system is not set as True, it will lead to several individuals not respecting the constrains.
-Consider setting repair=True 
-""")
+            print(
+                "\nWARNING: Dynamic mutation rates will introduce a higher number of removed nodes. "
+                "If repair=True is not set, it will lead to several individuals not respecting constraints.\n"
+            )
 
-        # Determine removable nodes (All nodes except Sources and Sinks)
-        self.removable_nodes = list(set(set(G.nodes) - set(sources)) - set(sinks))
+        # FIX 2: Cleaner set subtraction for determining removable nodes
+        self.removable_nodes = list(set(G.nodes) - set(sources) - set(sinks))
+        self.N = len(self.removable_nodes)
 
-        # Determine max flow and SCC:
         # Calculate Baselines for Normalization
-        # Use the original graph (0 nodes removed) as the "Max" reference
+        # (We pass a standard empty dict here because the baseline only evaluates 1 individual)
         self.base_flow, _, self.base_redundancy = evaluate(
-            [1]
-            * len(self.removable_nodes),  # Individual where all nodes are kept (all 1s)
+            [1] * self.N,  # Individual where all nodes are kept (all 1s)
             self.G,
             self.removable_nodes,
             "SuperSource",
             "SuperSink",
-        )
-        self._norm_denominator = np.array(
-            [self.base_flow, self.max_remove, self.base_redundancy]
+            shared_cache={},
         )
 
         # Handle cases where base values might be 0 to avoid DivisionByZero
         self.base_flow = max(self.base_flow, 1.0)
-        self.base_redundancy = max(self.base_redundancy, 1.0)
         self.base_cost = max(self.max_remove, 1.0)
-        self.N = len(self.removable_nodes)
+        self.base_redundancy = max(self.base_redundancy, 1.0)
+
+        self._norm_denominator = np.array(
+            [self.base_flow, self.base_cost, self.base_redundancy]
+        )
 
         # Define initial rates
-
         self.base_cxpb = base_cxpb
         self.base_mtpb = base_mtpb
         self.base_indpb = base_indpb / self.N
 
         # DEAP Setup
-        # Use a unique name for creator classes to avoid conflicts if re-instantiated
         if not hasattr(creator, "FitnessMin"):
             creator.create("FitnessMin", base.Fitness, weights=(-1.0, -1.0, -1.0))
         if not hasattr(creator, "Individual"):
@@ -446,39 +466,17 @@ Consider setting repair=True
         self.toolbox.register(
             "population", tools.initRepeat, list, self.toolbox.individual
         )
-
-        if self.delta_penalty:
-            self.toolbox.register(
-                "evaluate",
-                constrained_evaluate,
-                G=self.G,
-                removable_nodes=self.removable_nodes,
-                ssource="SuperSource",
-                ssink="SuperSink",
-                max_remove=self.max_remove,
-            )
-        else:
-            self.toolbox.register(
-                "evaluate",
-                evaluate,
-                G=self.G,
-                removable_nodes=self.removable_nodes,
-                ssource="SuperSource",
-                ssink="SuperSink",
-            )
-
         self.toolbox.register("mate", tools.cxUniform, indpb=0.5)
         self.toolbox.register("mutate", tools.mutFlipBit)
-
         self.toolbox.register(
             "repair",
             repair_individual,
             min_remove=self.min_remove,
             max_remove=self.max_remove,
         )
-
-        # change selection to NSGA for real multi-objective
         self.toolbox.register("select", tools.selNSGA2)
+
+        # NOTE: map and evaluate are now registered dynamically inside run()!
 
     def run(
         self,
@@ -486,7 +484,6 @@ Consider setting repair=True
         generations=100,
         early_stop_gen=10,
         tol=1e-6,
-        use_multiprocessing=True,
         verbose=False,
         **kwargs,
     ):
@@ -501,13 +498,47 @@ Consider setting repair=True
             stagnation_trigger=stagnation_trigger,
         )
 
-        if use_multiprocessing:
+        # FIX 3: Initialize pool and manager variables in the local scope
+        # so the `finally` block doesn't crash on UnboundLocalError
+        pool = None
+        manager = None
+        shared_cache = {}
+
+        if self.use_multiprocessing:
+            manager = multiprocessing.Manager()
+            shared_cache = manager.dict()  # Real inter-process shared memory
             pool = multiprocessing.Pool()
             self.toolbox.register("map", pool.map)
+        else:
+            self.toolbox.register("map", map)
+
+        # FIX 4: Dynamically register evaluate to inject the proper shared_cache
+        if self.delta_penalty:
+            self.toolbox.register(
+                "evaluate",
+                constrained_evaluate,
+                G=self.G,
+                removable_nodes=self.removable_nodes,
+                ssource="SuperSource",
+                ssink="SuperSink",
+                max_remove=self.max_remove,
+                shared_cache=shared_cache,
+            )
+        else:
+            self.toolbox.register(
+                "evaluate",
+                evaluate,
+                G=self.G,
+                removable_nodes=self.removable_nodes,
+                ssource="SuperSource",
+                ssink="SuperSink",
+                shared_cache=shared_cache,
+            )
 
         try:
             population = self.toolbox.population(n=population_size)
-            print(f"{time.ctime()} - Evaluating fitness for initial population...")
+            if self.verbose:
+                print(f"{time.ctime()} - Evaluating fitness for initial population...")
 
             # Evaluate initial population
             invalid_ind = [ind for ind in population if not ind.fitness.valid]
@@ -517,22 +548,24 @@ Consider setting repair=True
 
             stats = tools.Statistics(lambda ind: ind.fitness.values)
             stats.register("min", min)
+
             ref_point = (1.1, 1.1, 1.1)
             best_hv = 0.0
-
             generations_without_improvement = 0
             logs = {}
-
-            print(f"{time.ctime()} - Starting evolution for {generations} generations")
+            if self.verbose:
+                print(
+                    f"{time.ctime()} - Starting evolution for {generations} generations"
+                )
 
             for gen in range(generations):
-                # Selection
+                # Selection & Cloning
                 offspring = self.toolbox.select(population, len(population))
                 offspring = list(map(self.toolbox.clone, offspring))
 
                 # Crossover
                 for child1, child2 in zip(offspring[::2], offspring[1::2]):
-                    if random.random() < rates.cxpb:  # call updated rates
+                    if random.random() < rates.cxpb:
                         self.toolbox.mate(child1, child2)
                         del child1.fitness.values
                         del child2.fitness.values
@@ -543,21 +576,20 @@ Consider setting repair=True
                         self.toolbox.mutate(mutant, indpb=rates.indpb)
                         del mutant.fitness.values
 
-                if self.dynamic:
-                    if rates.burst_active:
-                        crowded = select_for_diversification(
-                            population=population, n=len(population) // 5
-                        )
-                        for ind in crowded:
-                            clone = self.toolbox.clone(ind)
-                            tools.mutFlipBit(
-                                clone, indpb=rates.indpb
-                            )  # rates already reset to base
-                            del clone.fitness.values
-                            self.toolbox.repair(clone)
-                            offspring.append(clone)
+                # Dynamic Burst Mutation
+                if self.dynamic and rates.burst_active:
+                    crowded = select_for_diversification(
+                        population=population, n=len(population) // 5
+                    )
+                    for ind in crowded:
+                        clone = self.toolbox.clone(ind)
+                        self.toolbox.mutate(clone, indpb=rates.indpb)
+                        del clone.fitness.values
+                        # FIX 5: Removed duplicate self.toolbox.repair(clone) here,
+                        # because the repair block below catches all offspring anyway.
+                        offspring.append(clone)
 
-                # is repair is set as True, then repair not viable individuals
+                # Repair
                 if self.repair:
                     for mutant in offspring:
                         self.toolbox.repair(mutant)
@@ -568,13 +600,16 @@ Consider setting repair=True
                 for ind, fit in zip(invalid_ind, fitnesses):
                     ind.fitness.values = fit
 
-                # Replacement
-                # Include parents for elitism
+                # Replacement (Elitism via NSGA2)
                 population[:] = self.toolbox.select(
                     population + offspring, len(population)
                 )
 
-                # Early Stopping
+                # FIX 6: Initialize metric trackers BEFORE the if-statement
+                # to prevent UnboundLocalError when feasible_pop is empty
+                avg_cd = 0.0
+                current_hv = 0.0
+
                 feasible_pop = [
                     ind for ind in population if ind.fitness.values[0] < 1e5
                 ]
@@ -588,33 +623,22 @@ Consider setting repair=True
                         [ind.fitness.crowding_dist for ind in front], dtype=float
                     )
 
-                    # Ignore infinities
                     finite_cd = crowding_distances[np.isfinite(crowding_distances)]
+                    if len(finite_cd) > 0:
+                        avg_cd = np.mean(finite_cd)
 
-                    avg_cd = np.mean(finite_cd)
-
-                    # If normalise on normalise hypervolume and use arbitrary worse case: (1.1,1.1,1.1)
                     if self.norm_hypervolume:
                         fitness_matrix = np.array([ind.fitness.values for ind in front])
                         norm_matrix = fitness_matrix / self._norm_denominator
                         normalized_mock_front = []
-                        for ind, norm_values in zip(front, norm_matrix):
-                            # Create a dummy object
+                        for norm_values in norm_matrix:
                             mock_ind = type("MockIndividual", (), {})()
-
-                            # Add fitness to mock individual
                             mock_ind.fitness = creator.FitnessMin()
-
-                            # Normalize the values
-                            # norm_values = self.normalize_fitness(ind.fitness.values)
-
-                            # Setting .values automatically triggers DEAP to calculate .wvalues
                             mock_ind.fitness.values = tuple(norm_values)
-
                             normalized_mock_front.append(mock_ind)
 
                         current_hv = hypervolume(normalized_mock_front, ref_point)
-                    else:  # use arbitrary  worse case (All Flow, Max removed nodes, Max redundancy) as reference point
+                    else:
                         current_hv = hypervolume(front, self._norm_denominator)
 
                     if current_hv > best_hv + tol:
@@ -622,9 +646,6 @@ Consider setting repair=True
                         generations_without_improvement = 0
                     else:
                         generations_without_improvement += 1
-                else:
-                    # If no feasible individuals yet, we don't increment/decrement early stopping
-                    current_hv = 0.0
 
                 if self.dynamic:
                     rates.step(generations_without_improvement)
@@ -632,10 +653,12 @@ Consider setting repair=True
                 # --- STATS AND LOGGING ---
                 fitness_keys = ["Flow", "Node", "Redundancy"]
 
-                record = {
-                    k: v for k, v in zip(fitness_keys, stats.compile(population)["min"])
-                }
-                record["hv"] = current_hv  # Track HV in logs
+                # `stats.compile` returns {"min":[flow, cost, red]}
+                # We unpack it into our custom keys
+                stat_values = stats.compile(population)["min"]
+                record = {k: v for k, v in zip(fitness_keys, stat_values)}
+
+                record["hv"] = current_hv
                 record["cd"] = avg_cd
                 record["hd"] = genotypic_diversity(population=population)
                 record["visited_nodes"] = get_nodes(
@@ -647,26 +670,32 @@ Consider setting repair=True
                 record["indpb"] = rates.indpb
                 logs[gen] = record
 
-                if verbose:
+                if self.verbose:
+                    # FIX 7: Fixed KeyError. record["min"] doesn't exist anymore!
                     print(
-                        f"""{time.ctime()} - Gen {gen}: Flow: {record["min"][0]}, Nodes: {record["min"][1]}, SCCs: {record["min"][2]}. HV: {round(record["hv"], 3)}"""
+                        f"{time.ctime()} - Gen {gen}: "
+                        f"Flow: {record['Flow']}, Nodes: {record['Node']}, SCCs: {record['Redundancy']}. "
+                        f"HV: {round(record['hv'], 3)}"
                     )
 
                 if generations_without_improvement >= early_stop_gen:
-                    print(
-                        f"{time.ctime()} Early stopping at generation {gen} (No HV improvement)."
-                    )
+                    if self.verbose:
+                        print(
+                            f"{time.ctime()} - Early stopping at generation {gen} (No HV improvement)."
+                        )
                     break
 
         finally:
-            if use_multiprocessing:
-                pool.close()
-                pool.join()
+            # FIX 8: Safe cleanup to prevent memory leaks or UnboundLocalError
+            if self.use_multiprocessing:
+                if pool is not None:
+                    pool.close()
+                    pool.join()
+                if manager is not None:
+                    manager.shutdown()
 
         results, norm = select_candidates(
             population=population, removable_nodes=self.removable_nodes
         )
-
-        # Convert best individual (binary mask) back to node names
 
         return results, logs, population, norm

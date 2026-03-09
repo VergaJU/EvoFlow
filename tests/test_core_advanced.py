@@ -52,7 +52,7 @@ def test_constrained_evaluate(simple_graph):
     # simple_graph has nodes: SuperSource, A, B, SuperSink
     # Removable: A, B
     removable_nodes = ["A", "B"]
-
+    cache = {}
     # Case 1: Feasible (Remove 1 node, Max 1)
     ind_valid = [0, 1]  # Remove A
     res_valid = constrained_evaluate(
@@ -62,6 +62,7 @@ def test_constrained_evaluate(simple_graph):
         "SuperSource",
         "SuperSink",
         max_remove=1,
+        shared_cache=cache,
     )
     # Should return normal fitness (Flow, Cost, Redundancy)
     # Flow=0 (A removed), Cost=1, Redundancy=0
@@ -76,6 +77,7 @@ def test_constrained_evaluate(simple_graph):
         "SuperSource",
         "SuperSink",
         max_remove=1,
+        shared_cache=cache,
     )
 
     # Should return penalty
@@ -152,6 +154,7 @@ def test_ga_dynamic_mode(simple_graph):
 def test_ga_delta_penalty(simple_graph):
     sources = ["SuperSource"]
     sinks = ["SuperSink"]
+    cache = {}
 
     # Initialize with delta_penalty=True
     opt = GAOptimizer(
@@ -160,6 +163,7 @@ def test_ga_delta_penalty(simple_graph):
         sinks,
         delta_penalty=True,
         max_remove=1,  # Tight constraint
+        shared_cache=cache,
     )
 
     # Run for a few generations

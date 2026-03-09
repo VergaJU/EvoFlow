@@ -2,7 +2,7 @@ import pytest
 import pandas as pd
 import networkx as nx
 import scipy.sparse as sp
-from unittest.mock import MagicMock
+import anndata as ad
 
 # --- Fixtures for Biology Tests ---
 
@@ -29,40 +29,26 @@ def mock_annotation():
 
 @pytest.fixture
 def mock_anndata():
-    """Returns a mocked AnnData object with sparse matrix X and obs"""
+    """Returns a real AnnData object with sparse matrix X and obs"""
     # 5 genes (cols), 4 cells (rows)
     # Genes: A, B, C, D, E
 
     # Create sparse matrix (4 cells x 5 genes)
     X = sp.csr_matrix(
         [
-            [1, 1, 0, 0, 1],  # Cell 1 (Type X)
-            [0, 1, 1, 0, 1],  # Cell 2 (Type X)
-            [1, 1, 1, 1, 1],  # Cell 3 (Type Y)
-            [0, 0, 0, 0, 0],  # Cell 4 (Type X)
+            [1, 0, 0, 0, 1],  # Cell 1 (Type X)
+            [1, 0, 1, 0, 1],  # Cell 2 (Type X)
+            [1, 0, 1, 1, 1],  # Cell 3 (Type Y)
+            [1, 0, 0, 0, 0],  # Cell 4 (Type X)
         ]
     )
 
     var_names = ["A", "B", "C", "D", "E"]
-
-    # Mock AnnData structure
-    mock_ad = MagicMock()
-    mock_ad.X = X
-    mock_ad.var_names = var_names
-
-    # obs dataframe
     obs_data = {"cell_type_col": ["Type X", "Type X", "Type Y", "Type X"]}
-    mock_ad.obs = pd.DataFrame(obs_data)
 
-    # Allow filtering syntax adata[condition]
-    # This is tricky to mock perfectly, so we'll handle it in the test or
-    # make the mock return a new mock when sliced.
-    def getitem(key):
-        return mock_ad  # Ideally return filtered copy, but for now return self
-
-    mock_ad.__getitem__ = MagicMock(side_effect=getitem)
-
-    return mock_ad
+    return ad.AnnData(
+        X=X, var=pd.DataFrame(index=var_names), obs=pd.DataFrame(obs_data)
+    )
 
 
 @pytest.fixture

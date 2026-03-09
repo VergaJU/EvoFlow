@@ -1,9 +1,10 @@
 import pandas as pd
-import numpy as np
 import networkx as nx
 import scanpy as sc
 import scipy as sp
 import time
+from anndata import AnnData
+from .preparer import prepare_flow_topology
 
 
 class BioNetworkPreparer:
@@ -15,10 +16,16 @@ class BioNetworkPreparer:
     def __init__(self):
         self.G = None
         self.annotation = None
-        self.adata = None
+        self.expression = None
         self.regulons = None
 
-    def load_data(self, network_path, annotation_path, h5ad_path, regulons_path=None):
+    def load_data(
+        self,
+        network_path,
+        annotation_path,
+        expression_path: str = None,
+        regulons_path=None,
+    ):
         """
         Loads the raw input files.
         """
@@ -33,8 +40,23 @@ class BioNetworkPreparer:
             annotation_path, sep="\t", index_col="gene"
         ).squeeze()
 
-        # Load Expression Data
-        self.adata = sc.read(h5ad_path)
+        if expression_path:
+            try:
+                if expression_path.endswith(".h5ad"):
+                    self.expression = sc.read(expression_path)
+                elif expression_path.endswith((".csv", ".tsv")):
+                    self.expression = pd.read_csv(
+                        expression_path,
+                        sep="\t" if expression_path.endswith(".tsv") else ",",
+                    )
+                else:
+                    raise ValueError(
+                        "Input must be anndata or tsv,csv expression matrices"
+                    )
+            except Exception as e:
+                raise ValueError(
+                    "Input must be anndata or tsv,csv expression matrices"
+                ) from e
 
         # Load Regulons (Optional)
         if regulons_path:
@@ -46,27 +68,35 @@ class BioNetworkPreparer:
         """
         Filters the AnnData object for a specific cell type.
         """
-        self.adata = self.adata[self.adata.obs[label_col] == cell_type]
+        self.expression = self.expression[self.expression.obs[label_col] == cell_type]
 
     def compute_percolation(self):
         """
-        Computes the proportion of gene-expressing cells to be used as percolation values.
+        Computes the proportion of gene-expressing cells to be used as percolation values and compute capacities of the edges.
         """
-        # Export count matrix and transform it to a Series with proportion of gene-expressing cells
-        df = pd.DataFrame(sp.sparse.csr_matrix.todense(self.adata.X))
-        df.columns = self.adata.var_names
+        # Export count matrix and transform it to a Series with count of gene-expressing cells
+        if isinstance(self.expression, AnnData):
+            df = pd.DataFrame(sp.sparse.csr_matrix.todense(self.expression.X))
+            df.columns = self.expression.var_names
+        else:
+            df = self.expression.copy()
+
+        # Count the number of cells expressing each gene
         df = df.astype("bool").sum()
 
-        # Normalize
-        if (df.max() - df.min()) != 0:
-            df = (df - df.min()) / (df.max() - df.min())
+        # New Normalization Logic: Divide by the maximum count
+        max_count = df.max()
+
+        if max_count != 0:
+            df = df / max_count
         else:
-            df[:] = 0  # Handle edge case where all values are same
+            df[:] = (
+                0.0  # Handle edge case where the expression matrix is entirely zeros
+            )
 
         # Create dictionary with proportion of gene-expressing cells
-        # if the gene is not present in our dataframe, assign 0 to the gene
         self.percolation_values = {
-            i: df.loc[i] if i in df else 0 for i, v in self.annotation.items()
+            i: df.loc[i] if i in df.index else 0.0 for i in self.annotation.index
         }
         return self.percolation_values
 
@@ -83,17 +113,32 @@ class BioNetworkPreparer:
         print(f"{time.ctime()} - Creating network")
         self.G = nx.DiGraph()
 
-        # Add nodes with attributes
-        nodes = [
-            (
-                index,
-                {
-                    "node_type": value,
-                    "percolation": self.percolation_values.get(index, 0),
-                },
-            )
-            for index, value in self.annotation.items()
-        ]
+        if self.percolation_values:
+            # Add nodes with percolation if expression is provided
+            nodes = [
+                (
+                    index,
+                    {
+                        "node_type": value,
+                        "percolation": self.percolation_values.get(index, 0),
+                    },
+                )
+                for index, value in self.annotation.items()
+            ]
+
+        else:
+            # add nodes without percolation equal to 1 if expression is not provided
+            nodes = [
+                (
+                    index,
+                    {
+                        "node_type": value,
+                        "percolation": 1,
+                    },
+                )
+                for index, value in self.annotation.items()
+            ]
+
         self.G.add_nodes_from(nodes)
 
         # Add edges with attributes
@@ -147,6 +192,10 @@ class BioNetworkPreparer:
         """
         if self.regulons is None:
             return []
+        elif len(mediators_list) == 0:
+            raise ValueError(
+                "Regulons based target idenfication requires at leas some receptors or mediators"
+            )
 
         # Filter columns in regulons that contain at least one value from mediators_list
         filtered_regulon = self.regulons.loc[
@@ -155,121 +204,104 @@ class BioNetworkPreparer:
         target_genes = filtered_regulon.columns.tolist()
         return target_genes
 
-    def prepare_flow_topology(self, ligands, target_genes):
+    def prepare_bioflow_topology(self, ligands, target_genes):
         """
-        Adds SuperSource, SuperSink, and dummy nodes to prepare for Flow analysis.
+        Biological wrapper for flow topology preparation: derives sources/sinks from ligands/targets, then calls general function.
 
         Args:
-            ligands (list): List of ligand gene names (sources).
-            target_genes (list): List of target gene names (sinks).
+            ligands (list): List of ligand gene names.
+            target_genes (list): List of target gene names.
 
         Returns:
-            sources (list): List of source nodes (ligands + SuperSource).
-            sinks (list): List of sink nodes (dummy nodes + SuperSink).
+            tuple: (sources, sinks) as returned by the general prepare_flo_topology.
         """
-        # Calculate mean capacity for dummy edges
-        capacities = [
-            d["capacity"] for u, v, d in self.G.edges(data=True) if "capacity" in d
-        ]
-        mean_capacity = np.mean(capacities) if capacities else 1.0
+        # Derive sink_nodes (targets)
+        sink_nodes = list(set(target_genes))
 
-        # --- Setup Sinks ---
-        sinks = list(set(target_genes))
-        supersink = [("SuperSink", {"node_type": "TargetGenes", "percolation": 0})]
-
-        dummy_sink_edges = []
-        dummy_source_edges = []
-
-        dummy_sinks = []
-
-        for node in sinks:
-            if node in self.G:  # Only add if node exists in graph
-                dummy_name = f"dummy_{node}"
-                dummy_sinks.append(
-                    (dummy_name, {"node_type": "dummy", "percolation": 1})
-                )
-
-                # Edge from Gene -> Dummy
-                dummy_sink_edges.append(
-                    (
-                        node,
-                        dummy_name,
-                        {"weight": 1, "edge_type": "sink", "capacity": mean_capacity},
-                    )
-                )
-
-        # Edges from Dummy -> SuperSink
-        sink_edges = []
-        for node in dummy_sinks:
-            sink_edges.append(
-                (
-                    node[0],
-                    "SuperSink",
-                    {"weight": 1, "edge_type": "sink", "capacity": 999},
-                )
-            )
-
-        self.G.add_nodes_from(supersink)
-        self.G.add_nodes_from(dummy_sinks)
-        self.G.add_edges_from(dummy_sink_edges)
-        self.G.add_edges_from(sink_edges)
-
-        # --- Setup Sources ---
-        supersource = [("SuperSource", {"node_type": "Source", "percolation": 0})]
-
-        # Connect SuperSource to Receptors that are neighbors of Ligands
-        # Note: The original script logic was:
-        # Iterate ligands -> find neighbors -> if neighbor is receptor -> connect SuperSource to Receptor
-
+        # Derive source_nodes (receptors neighboring ligands)
         connected_receptors = set()
         for node in ligands:
             if node in self.G:
                 for neighbor in self.G.neighbors(node):
-                    if neighbor not in connected_receptors:
-                        attrs = self.G.nodes[neighbor]
-                        if attrs.get("node_type") == "receptor":
-                            connected_receptors.add(neighbor)
+                    if (
+                        neighbor not in connected_receptors
+                        and self.G.nodes[neighbor].get("node_type") == "receptor"
+                    ):
+                        connected_receptors.add(neighbor)
+        source_nodes = list(connected_receptors)
 
-        # Create dummy source nodes similar to dummy sinks
-        dummy_source_nodes = []
-        dummy_source_edges = []
-
-        for node in connected_receptors:
-            dummy_name = f"dummy_{node}"
-            dummy_source_nodes.append(
-                (dummy_name, {"node_type": "dummy", "percolation": 1})
-            )
-
-            # Edge from Receptor -> Dummy Source
-            dummy_source_edges.append(
-                (
-                    dummy_name,
-                    node,
-                    {"weight": 1, "edge_type": "source", "capacity": mean_capacity},
-                )
-            )
-
-        # Edges from Dummy Source -> SuperSource
-        source_edges = []
-        for node in dummy_source_nodes:
-            source_edges.append(
-                (
-                    "SuperSource",
-                    node[0],
-                    {"weight": 1, "edge_type": "source", "capacity": 999},
-                )
-            )
-
-        self.G.add_nodes_from(supersource)
-        self.G.add_nodes_from(dummy_source_nodes)
-        self.G.add_edges_from(dummy_source_edges)
-        self.G.add_edges_from(source_edges)
-
-        # Define sources and sinks lists for the GA
-        final_sources = ["SuperSource"] + [n[0] for n in dummy_source_nodes]
-        final_sinks = [n[0] for n in dummy_sinks] + ["SuperSink"]
-
-        return final_sources, final_sinks
+        # Call general function
+        return prepare_flow_topology(self.G, source_nodes, sink_nodes)
 
     def get_graph(self):
         return self.G
+
+    def prepare_network(
+        self,
+        network_path: str,
+        annotation_path: str,
+        expression_path: str,
+        ligands: list,
+        mediators_list: list,
+        label: str = None,
+        celltype: str = None,
+        regulons_path: str = None,
+        targets: list = None,
+    ) -> tuple:
+        """
+        Orchestrates the complete network preparation workflow: load data, filter expression,
+        compute percolation, build network, update capacities, identify targets, and prepare topology.
+
+        Args:
+            network_path (str): Path to network file.
+            annotation_path (str): Path to annotation file.
+            expression_path (str): Path to expression data file (.h5ad, .csv, or .tsv).
+            ligands (list): List of ligand gene names (source nodes).
+            mediators_list (list): List of mediator/receptor gene names.
+            label (str, optional): Column name in AnnData obs for cell type filtering.
+            celltype (str, optional): Cell type to filter by.
+            regulons_path (str, optional): Path to regulons file for target identification.
+            targets (list, optional): List of target genes (used if regulons_path is None).
+
+        Returns:
+            tuple: (graph, sources, sinks) where graph is the prepared NetworkX DiGraph
+                   and sources/sinks are lists for flow optimization.
+
+        Raises:
+            ValueError: If ligands or mediators_list are empty, or if both regulons_path and targets are None.
+        """
+        # Input validation
+        if not ligands:
+            raise ValueError("ligands list cannot be empty")
+        if regulons_path and not mediators_list:
+            raise ValueError("mediators_list cannot be empty when using regulons")
+        if regulons_path is None and targets is None:
+            raise ValueError("Either regulons_path or targets must be provided")
+
+        # Load data
+        self.load_data(network_path, annotation_path, expression_path, regulons_path)
+
+        # Filter expression data if AnnData
+        if isinstance(self.expression, AnnData):
+            self.filter_expression_data(label, celltype)
+
+        # Compute percolation
+        self.compute_percolation()
+
+        # Build base network
+        self.build_base_network()
+
+        # Update capacities
+        self.update_edge_capacities(method="multiplicative")
+
+        # Identify targets
+        if regulons_path:
+            target_genes = self.identify_targets(mediators_list)
+        elif targets:
+            target_genes = targets
+
+        # Prepare topology and get sources/sinks
+        sources, sinks = self.prepare_bioflow_topology(ligands, target_genes)
+
+        # Return graph and topology
+        return self.G, sources, sinks

@@ -72,9 +72,14 @@ def test_evaluate(simple_graph):
 
     removable_nodes = ["A", "B"]
     ind_keep_all = [1, 1]
-
+    cache = {}
     flow, cost, coocc = evaluate(
-        ind_keep_all, simple_graph, removable_nodes, "SuperSource", "SuperSink"
+        ind_keep_all,
+        simple_graph,
+        removable_nodes,
+        "SuperSource",
+        "SuperSink",
+        shared_cache=cache,
     )
 
     assert flow == 5.0
@@ -83,7 +88,12 @@ def test_evaluate(simple_graph):
     # Individual: [0, 1] (Remove A) -> Flow 0, Cost 1
     ind_remove_A = [0, 1]
     flow, cost, coocc = evaluate(
-        ind_remove_A, simple_graph, removable_nodes, "SuperSource", "SuperSink"
+        ind_remove_A,
+        simple_graph,
+        removable_nodes,
+        "SuperSource",
+        "SuperSink",
+        shared_cache=cache,
     )
 
     assert flow == 0.0
