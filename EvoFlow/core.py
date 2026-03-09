@@ -180,7 +180,9 @@ def penalty_distance(individual, max_remove):
     return float((individual.count(0) - max_remove) ** 2)
 
 
-def constrained_evaluate(individual, G, removable_nodes, ssource, ssink, max_remove):
+def constrained_evaluate(
+    individual, G, removable_nodes, ssource, ssink, max_remove, shared_cache
+):
     """
     A manual wrapper that mimics DeltaPenalty but is picklable.
     """
@@ -191,7 +193,7 @@ def constrained_evaluate(individual, G, removable_nodes, ssource, ssink, max_rem
         return tuple(p + dist for p in penalty_base)
 
     # Otherwise, return actual fitness
-    return evaluate(individual, G, removable_nodes, ssource, ssink)
+    return evaluate(individual, G, removable_nodes, ssource, ssink, shared_cache)
 
 
 # --- Genotypic diversity ----
