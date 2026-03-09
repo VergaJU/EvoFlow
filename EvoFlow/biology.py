@@ -75,7 +75,7 @@ class BioNetworkPreparer:
         Computes the proportion of gene-expressing cells to be used as percolation values and compute capacities of the edges.
         """
         # Export count matrix and transform it to a Series with count of gene-expressing cells
-        if type(self.expression) == AnnData:
+        if isinstance(self.expression, AnnData):
             df = pd.DataFrame(sp.sparse.csr_matrix.todense(self.expression.X))
             df.columns = self.expression.var_names
         else:
@@ -282,7 +282,7 @@ class BioNetworkPreparer:
         self.load_data(network_path, annotation_path, expression_path, regulons_path)
 
         # Filter expression data if AnnData
-        if type(self.expression) == AnnData:
+        if isinstance(self.expression, AnnData):
             self.filter_expression_data(label, celltype)
 
         # Compute percolation
