@@ -18,58 +18,92 @@ from EvoFlow import utils
 def run_evoflow(
     network,
     annotation,
-    file,
-    regulons,
-    receptors_raw,
-    mediators_raw,
-    ligands_file,
-    label,
-    celltype,
+    expression_file,
+    receptors_raw: str = None,
+    mediators_raw: str = None,
+    ligands_file: str = None,
+    label: str = None,
+    celltype: str = None,
+    regulons: str = None,
+    targets: str = None,
     generations=10000,
     population_size=1000,
     return_results=False,
     **kwargs,
 ):
     """
-    This function contains all your logic and can be called from other scripts.
+    Orchestrates the full EvoFlow pipeline: biological network preparation followed by
+    genetic algorithm optimization. Can be called from other scripts or CLI.
+
+    Args:
+        network (str): Path to network file.
+        annotation (str): Path to annotation file.
+        expression_file (str): Path to expression data file (.h5ad, .csv, or .tsv).
+        receptors_raw (str, optional): Pipe-delimited list of receptors.
+        mediators_raw (str, optional): Comma-delimited list of mediators.
+        ligands_file (str): Path to ligands CSV file (must contain 'x' column).
+        label (str, optional): Column name in AnnData obs for cell type filtering.
+        celltype (str, optional): Cell type to filter by.
+        regulons (str, optional): Path to regulons file for target identification.
+        targets (str, optional): Comma-delimited list of target genes (if regulons not used).
+        generations (int): Number of GA generations (default 10000).
+        population_size (int): GA population size (default 1000).
+        return_results (bool): If True, return results; if False, return filename_prefix.
+        **kwargs: Additional keyword arguments passed to GAOptimizer.
+
+    Returns:
+        If return_results is True: (best_nodes_removed, logs, pop, norm)
+        Otherwise: filename_prefix (str)
     """
     warnings.filterwarnings("ignore")
 
     # Process Inputs (Logic moved from main)
-    receptors = receptors_raw.split("|")
-    mediators = mediators_raw.split(",")
-    mediators_list = mediators + receptors
+    if receptors_raw and mediators_raw:
+        receptors = receptors_raw.split("|")
+        mediators = mediators_raw.split(",")
+        mediators_list = mediators + receptors
+    elif receptors_raw:
+        receptors = receptors_raw.split("|")
+        mediators_list = receptors
+    elif mediators_raw:
+        mediators = mediators_raw.split(",")
+        mediators_list = mediators
+    else:
+        mediators_list = []
 
     ligands_df = pd.read_csv(ligands_file)
     ligands = ligands_df.x.values.tolist()
 
-    filename_prefix = str.split(str.split(os.path.basename(file), ".")[0], "tmp")[0]
+    filename_prefix = str.split(
+        str.split(os.path.basename(expression_file), ".")[0], "tmp"
+    )[0]
+
+    # Parse targets if provided as string
+    targets_list = targets.split(",") if targets else None
 
     # --- Biology Phase ---
     preparer = BioNetworkPreparer()
-    preparer.load_data(network, annotation, file, regulons)
-
-    preparer.filter_expression_data(label, celltype)
-    preparer.compute_percolation()
-    preparer.build_base_network()
-
-    # Update Capacities
-    preparer.update_edge_capacities(method="multiplicative")
-
-    # Identify Targets
-    target_genes = preparer.identify_targets(mediators_list)
+    try:
+        G, sources, sinks = preparer.prepare_network(
+            network_path=network,
+            annotation_path=annotation,
+            expression_path=expression_file,
+            ligands=ligands,
+            mediators_list=mediators_list,
+            label=label,
+            celltype=celltype,
+            regulons_path=regulons,
+            targets=targets_list,
+        )
+    except ValueError as e:
+        print(f"Error during network preparation: {e}")
+        return
 
     # Visualization (Pre-optimization)
     plot_node_proportions(preparer.annotation, filename_prefix)
-    plot_node_attribute(
-        preparer.G, filename_prefix, attribute="percolation", show=False
-    )
-    plot_edge_attribute(preparer.G, filename_prefix, "capacity", show=False)
-    plot_edge_attribute(preparer.G, filename_prefix, "weight", show=False)
-    # Prepare Topology (Add SuperSource/Sink)
-    sources, sinks = preparer.prepare_flow_topology(ligands, target_genes)
-
-    G = preparer.get_graph()
+    plot_node_attribute(G, filename_prefix, attribute="percolation", show=False)
+    plot_edge_attribute(G, filename_prefix, "capacity", show=False)
+    plot_edge_attribute(G, filename_prefix, "weight", show=False)
 
     # Extract Subgraph (Optimization on active subgraph only)
     # Original script does this logic:

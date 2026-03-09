@@ -134,19 +134,22 @@ def evaluate(individual, G, removable_nodes, ssource, ssink):
     2. Number of Removed Nodes
     3. Co-occurrence in SCCs
     """
-    # Identify nodes to remove
-    removed_nodes_names = get_nodes(removable_nodes, individual)
+    # Identify nodes to remove (converted to a set for much faster lookups)
+    removed_nodes_names = set(get_nodes(removable_nodes, individual))
 
-    # Create temp graph
-    G_copy = G.copy()
-    G_copy.remove_nodes_from(removed_nodes_names)
+    # Identify nodes to KEEP
+    nodes_to_keep = [n for n in G.nodes if n not in removed_nodes_names]
+
+    # Create a read-only subgraph view (Original G is completely safe)
+    G_sub = G.subgraph(nodes_to_keep)
 
     # 1. Flow Capacity
-    flow_value = calculate_flow_capacity(G_copy, ssource, ssink)
+    flow_value = calculate_flow_capacity(G_sub, ssource, ssink)
 
     # 2. SCC Co-occurrence
-    sccs = find_scc(G_copy)
+    sccs = find_scc(G_sub)
     redundancy = scc_redundancy(sccs=sccs)
+
     # 3. Cost (Number of nodes removed)
     cost = len(removed_nodes_names)
 
