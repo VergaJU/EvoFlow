@@ -399,6 +399,7 @@ class GAOptimizer:
         **kwargs,
     ):
         self.G = G
+        self.SG = extract_active_subgraph(G)
         self.sources = sources
         self.sinks = sinks
         self.min_remove = min_remove
@@ -419,7 +420,7 @@ class GAOptimizer:
             )
 
         # FIX 2: Cleaner set subtraction for determining removable nodes
-        self.removable_nodes = list(set(G.nodes) - set(sources) - set(sinks))
+        self.removable_nodes = list(set(self.SG.nodes) - set(sources) - set(sinks))
         self.N = len(self.removable_nodes)
 
         # Calculate Baselines for Normalization
@@ -517,7 +518,7 @@ class GAOptimizer:
             self.toolbox.register(
                 "evaluate",
                 constrained_evaluate,
-                G=self.G,
+                G=self.SG,
                 removable_nodes=self.removable_nodes,
                 ssource="SuperSource",
                 ssink="SuperSink",
@@ -528,7 +529,7 @@ class GAOptimizer:
             self.toolbox.register(
                 "evaluate",
                 evaluate,
-                G=self.G,
+                G=self.SG,
                 removable_nodes=self.removable_nodes,
                 ssource="SuperSource",
                 ssink="SuperSink",

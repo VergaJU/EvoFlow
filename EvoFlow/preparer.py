@@ -19,7 +19,7 @@ def prepare_flow_topology(G, source_nodes, sink_nodes):
     mean_capacity = np.mean(capacities) if capacities else 1.0
 
     # Setup SuperSink and dummy sinks
-    supersink = [("SuperSink", {"node_type": "TargetGenes", "percolation": 0})]
+    supersink = [("SuperSink", {"node_type": "Sink", "percolation": 0})]
     dummy_sinks = []
     dummy_sink_edges = []
     sink_edges = []
@@ -39,7 +39,7 @@ def prepare_flow_topology(G, source_nodes, sink_nodes):
                 (
                     dummy_name,
                     "SuperSink",
-                    {"weight": 1, "edge_type": "sink", "capacity": 999},
+                    {"weight": 1, "edge_type": "sink", "capacity": float("inf")},
                 )
             )
 
@@ -70,7 +70,7 @@ def prepare_flow_topology(G, source_nodes, sink_nodes):
             (
                 "SuperSource",
                 dummy_name,
-                {"weight": 1, "edge_type": "source", "capacity": 999},
+                {"weight": 1, "edge_type": "source", "capacity": float("inf")},
             )
         )
 

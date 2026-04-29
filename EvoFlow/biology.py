@@ -18,6 +18,7 @@ class BioNetworkPreparer:
         self.annotation = None
         self.expression = None
         self.regulons = None
+        self.percolation_values = False
 
     def load_data(
         self,
