@@ -10,4 +10,3 @@ scipy
 deap
 matplotlib
 seaborn
-yaml
