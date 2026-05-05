@@ -18,7 +18,7 @@ if not hasattr(creator, "Individual"):
 def test_flow_calculation(simple_graph):
     # Path: S -> A(10) -> B(5) -> T(10)
     # Bottleneck is A->B with capacity 5.0
-    flow = calculate_flow_capacity(simple_graph, "SuperSource", "SuperSink")
+    flow, _ = calculate_flow_capacity(simple_graph, "SuperSource", "SuperSink")
     assert flow == 5.0
 
 
@@ -73,7 +73,7 @@ def test_evaluate(simple_graph):
     removable_nodes = ["A", "B"]
     ind_keep_all = [1, 1]
     cache = {}
-    flow, cost, coocc = evaluate(
+    (flow, cost, coocc), _ = evaluate(
         ind_keep_all,
         simple_graph,
         removable_nodes,
@@ -87,7 +87,7 @@ def test_evaluate(simple_graph):
 
     # Individual: [0, 1] (Remove A) -> Flow 0, Cost 1
     ind_remove_A = [0, 1]
-    flow, cost, coocc = evaluate(
+    (flow, cost, coocc), _ = evaluate(
         ind_remove_A,
         simple_graph,
         removable_nodes,

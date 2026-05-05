@@ -66,7 +66,7 @@ def test_constrained_evaluate(simple_graph):
     )
     # Should return normal fitness (Flow, Cost, Redundancy)
     # Flow=0 (A removed), Cost=1, Redundancy=0
-    assert res_valid == (0.0, 1, 0)
+    assert res_valid[0] == (0.0, 1, 0)
 
     # Case 2: Infeasible (Remove 2 nodes, Max 1)
     ind_invalid = [0, 0]  # Remove A and B
@@ -84,8 +84,8 @@ def test_constrained_evaluate(simple_graph):
     # Penalty base is 1e6.
     # Distance = (2 - 1)^2 = 1.0
     # Expected = (1e6 + 1.0, 1e6 + 1.0, 1e6 + 1.0)
-    assert res_invalid[0] > 1e5
-    assert res_invalid == (1000001.0, 1000001.0, 1000001.0)
+    assert res_invalid[0][0] > 1e5
+    assert res_invalid[0] == (1000001.0, 1000001.0, 1000001.0)
 
 
 def test_select_for_diversification():
