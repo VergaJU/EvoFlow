@@ -32,12 +32,12 @@ def calculate_flow_capacity(G, ssource, ssink):
     Calculates max flow capacity between source and sink.
     """
     try:
-        flow_value = nx.maximum_flow_value(G, ssource, ssink, capacity="capacity")
+        flow_value, flow_dict = nx.maximum_flow(G, ssource, ssink, capacity="capacity")
     except Exception as e:
         # Fallback or error handling if graph structure is invalid
         print(f"Error calculating flow: {e}")
         flow_value = 0
-    return flow_value
+    return flow_value, flow_dict
 
 
 def extract_active_subgraph(G, source="SuperSource", sink="SuperSink"):
@@ -149,7 +149,9 @@ def evaluate(individual, G, removable_nodes, ssource, ssink, shared_cache):
     # --- EVALUATION ---
     # 1. Flow Capacity
     try:
-        flow_value = nx.maximum_flow_value(G_sub, ssource, ssink, capacity="capacity")
+        flow_value, flow_dict = nx.maximum_flow(
+            G_sub, ssource, ssink, capacity="capacity"
+        )
     except Exception:
         flow_value = 0
 
@@ -164,7 +166,7 @@ def evaluate(individual, G, removable_nodes, ssource, ssink, shared_cache):
     result = (flow_value, cost, redundancy)
     shared_cache[cache_key] = result
 
-    return result
+    return result, flow_dict
 
 
 # --- Constraint Helpers ---
@@ -190,7 +192,7 @@ def constrained_evaluate(
         # Penalty values (must be a tuple for multi-objective)
         penalty_base = (1e6, 1e6, 1e6)
         dist = penalty_distance(individual, max_remove)
-        return tuple(p + dist for p in penalty_base)
+        return tuple(p + dist for p in penalty_base), {}
 
     # Otherwise, return actual fitness
     return evaluate(individual, G, removable_nodes, ssource, ssink, shared_cache)
@@ -425,7 +427,7 @@ class GAOptimizer:
 
         # Calculate Baselines for Normalization
         # (We pass a standard empty dict here because the baseline only evaluates 1 individual)
-        self.base_flow, _, self.base_redundancy = evaluate(
+        (self.base_flow, _, self.base_redundancy), _ = evaluate(
             [1] * self.N,  # Individual where all nodes are kept (all 1s)
             self.G,
             self.removable_nodes,
@@ -544,8 +546,12 @@ class GAOptimizer:
             # Evaluate initial population
             invalid_ind = [ind for ind in population if not ind.fitness.valid]
             fitnesses = self.toolbox.map(self.toolbox.evaluate, invalid_ind)
-            for ind, fit in zip(invalid_ind, fitnesses):
+            for ind, (fit, flow) in zip(invalid_ind, fitnesses):
                 ind.fitness.values = fit
+
+            # fitnesses = self.toolbox.map(self.toolbox.evaluate, invalid_ind)
+            # for ind, fit in zip(invalid_ind, fitnesses):
+            #     ind.fitness.values = fit
 
             stats = tools.Statistics(lambda ind: ind.fitness.values)
             stats.register("min", min)
@@ -598,7 +604,10 @@ class GAOptimizer:
                 # Evaluation
                 invalid_ind = [ind for ind in offspring if not ind.fitness.valid]
                 fitnesses = self.toolbox.map(self.toolbox.evaluate, invalid_ind)
-                for ind, fit in zip(invalid_ind, fitnesses):
+                print(f"""
+                      Fitness of individual 0: {fitnesses[0][0]}
+                        Len flow_dict individual 0: {len(fitnesses[0][1])}""")
+                for ind, (fit, flow) in zip(invalid_ind, fitnesses):
                     ind.fitness.values = fit
 
                 # Replacement (Elitism via NSGA2)
