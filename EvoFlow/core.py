@@ -140,7 +140,7 @@ def evaluate(individual, G, removable_nodes, ssource, ssink, shared_cache):
     # --- CACHE CHECK ---
     cache_key = frozenset(removed_nodes_names)
     if cache_key in shared_cache:
-        return shared_cache[cache_key]  # Returns all 3 objectives instantly!
+        return shared_cache[cache_key], {}  # Returns all 3 objectives instantly!
 
     # --- GRAPH CREATION ---
     nodes_to_keep = [n for n in G.nodes if n not in removed_nodes_names]
@@ -604,9 +604,7 @@ class GAOptimizer:
                 # Evaluation
                 invalid_ind = [ind for ind in offspring if not ind.fitness.valid]
                 fitnesses = self.toolbox.map(self.toolbox.evaluate, invalid_ind)
-                print(f"""
-                      Fitness of individual 0: {fitnesses[0][0]}
-                        Len flow_dict individual 0: {len(fitnesses[0][1])}""")
+
                 for ind, (fit, flow) in zip(invalid_ind, fitnesses):
                     ind.fitness.values = fit
 
