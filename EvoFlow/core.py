@@ -301,9 +301,9 @@ class AdaptiveRates:
         max_cxpb=0.95,
         max_mtpb=0.8,
         max_indpb=None,
-        decay=0.99,
-        stagnation_trigger=5,
-        reheat_attenuation=0.7,
+        decay=0.997,
+        stagnation_trigger=3,
+        reheat_attenuation=0.9,
     ):  # <--- New: how much the "spike" weakens each time
         self.base_cxpb = base_cxpb
         self.base_mtpb = base_mtpb
@@ -393,9 +393,9 @@ class GAOptimizer:
         repair=False,
         norm_hypervolume=False,
         dynamic=False,
-        base_cxpb=0.9,  # Start mating 90% of the population
-        base_mtpb=0.3,  # Start mutating 30% of the population
-        base_indpb=3,  # Start with a probability of mutating 3 bits per muated individual
+        base_cxpb=0.75,  # Start mating 75% of the population
+        base_mtpb=0.9,  # Start mutating 90% of the population
+        base_indpb=5,  # Start with a probability of mutating 5 bits per muated individual
         use_multiprocessing=True,
         verbose=False,
         **kwargs,
