@@ -31,6 +31,7 @@ def calculate_flow_capacity(G, ssource, ssink):
     """
     Calculates max flow capacity between source and sink.
     """
+    flow_dict = {}
     try:
         flow_value, flow_dict = nx.maximum_flow(G, ssource, ssink, capacity="capacity")
     except Exception as e:
