@@ -148,6 +148,7 @@ def evaluate(individual, G, removable_nodes, ssource, ssink, shared_cache):
 
     # --- EVALUATION ---
     # 1. Flow Capacity
+    flow_dict = {}
     try:
         flow_value, flow_dict = nx.maximum_flow(
             G_sub, ssource, ssink, capacity="capacity"
