@@ -27,7 +27,8 @@ python -m EvoFlow.cli \
   --mediators "geneC,geneD" \
   --ligands <path_csv> \
   --label <obs_column> \
-  --celltype <cell_type>
+  --celltype <cell_type> \
+  --n_jobs <int>
 ```
 
 ### CI/Lint (exact order as CI.yml)
@@ -56,6 +57,7 @@ pre-commit install
 
 - **GA**: Uses DEAP with global `creator` registration. `GAOptimizer` in `core.py` handles this.
 - **Evaluation**: Designed for `multiprocessing` - use top-level functions (picklable).
+- **Parallelism**: `GAOptimizer` accepts `n_jobs` to control the number of parallel worker processes. `_get_n_jobs()` validates the value (raises `ValueError` if < 1, clamps to `cpu_count()` with a warning if too large).
 - **Graph preprocessing**: Adds "SuperSource" and "SuperSink" nodes for flow computation.
 - **Active subgraph**: Only paths connecting ligands to targets are optimized.
 - **Output files**: Prefixed with input filename (via `utils.py`)

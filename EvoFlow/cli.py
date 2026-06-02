@@ -182,6 +182,12 @@ def main():
     parser.add_argument("--repair", type=bool, default=True)
     parser.add_argument("--norm_hypervolume", type=bool, default=False)
     parser.add_argument("--dynamic_rates", type=bool, default=True)
+    parser.add_argument(
+        "--n_jobs",
+        type=int,
+        default=None,
+        help="Number of parallel jobs for multiprocessing (default: all CPUs)",
+    )
 
     args = parser.parse_args()
 
@@ -198,6 +204,7 @@ def main():
         celltype=args.celltype,
         generations=args.generations,
         pop_size=args.pop_size,
+        n_jobs=args.n_jobs,
     )
 
 
