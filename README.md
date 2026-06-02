@@ -66,6 +66,7 @@ python -m EvoFlow.cli \
 | Repair | `--repair` | Repair invalid individuals (default: True) |
 | Norm Hypervolume | `--norm_hypervolume` | Normalize hypervolume calculation (default: False) |
 | Dynamic Rates | `--dynamic_rates` | Use dynamic mutation/crossover rates (default: True) |
+| Parallel Jobs | `--n_jobs` | Number of parallel jobs for multiprocessing (default: all CPUs) |
 
 ### Python API
 
