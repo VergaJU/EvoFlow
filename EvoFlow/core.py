@@ -400,6 +400,7 @@ class GAOptimizer:
         base_indpb=5,  # Start with a probability of mutating 5 bits per muated individual
         use_multiprocessing=True,
         verbose=False,
+        n_jobs=None,
         **kwargs,
     ):
         self.G = G
@@ -416,6 +417,7 @@ class GAOptimizer:
             use_multiprocessing  # FIX 1: Fixed typo 'use_multiptocessing'
         )
         self.verbose = verbose
+        self.n_jobs = n_jobs
 
         if self.dynamic and not self.repair:
             print(
@@ -483,6 +485,27 @@ class GAOptimizer:
 
         # NOTE: map and evaluate are now registered dynamically inside run()!
 
+    def _get_n_jobs(self):
+        """Return the number of parallel jobs to use for multiprocessing.
+
+        If n_jobs is set (not None), use that value.
+        Otherwise, fall back to multiprocessing.cpu_count().
+
+        Raises:
+            ValueError: If n_jobs is specified and is less than 1.
+        """
+        if self.n_jobs is not None:
+            if self.n_jobs < 1:
+                raise ValueError(f"n_jobs must be >= 1, got {self.n_jobs}")
+            max_jobs = multiprocessing.cpu_count()
+            if self.n_jobs > max_jobs:
+                print(
+                    f"Warning: n_jobs={self.n_jobs} exceeds CPU count ({max_jobs}), clamping to {max_jobs}"
+                )
+                return max_jobs
+            return self.n_jobs
+        return multiprocessing.cpu_count()
+
     def run(
         self,
         population_size=300,
@@ -512,7 +535,7 @@ class GAOptimizer:
         if self.use_multiprocessing:
             manager = multiprocessing.Manager()
             shared_cache = manager.dict()  # Real inter-process shared memory
-            pool = multiprocessing.Pool()
+            pool = multiprocessing.Pool(processes=self._get_n_jobs())
             self.toolbox.register("map", pool.map)
         else:
             self.toolbox.register("map", map)
