@@ -6,7 +6,10 @@ from deap import base, creator, tools
 from deap.benchmarks.tools import hypervolume
 import numpy as np
 from scipy.spatial.distance import pdist
-
+import pandas as pd
+from EvoFlow.features_extraction import NetworkFeatures
+from EvoFlow.model import GAM
+import math
 # --- Helper Functions (Graph Algorithms) ---
 
 
@@ -506,19 +509,54 @@ class GAOptimizer:
             return self.n_jobs
         return multiprocessing.cpu_count()
 
+    def guess_parameters(self):
+        """
+        guess fatures using GAM model
+        """
+        nf = NetworkFeatures(G=self.SG, b=self.max_remove)
+        features = pd.DataFrame(nf.extract_features())
+        gam = GAM()
+        population, patience = gam.rank(df=features)
+        return math.ceil(population), math.ceil(patience)
+
     def run(
         self,
-        population_size=300,
-        generations=100,
-        early_stop_gen=10,
+        population_size=None,
+        generations=1000,
+        early_stop_gen=None,
         tol=1e-6,
         verbose=False,
+        guess_parameters=True,
         **kwargs,
     ):
         """
         Runs the Genetic Algorithm.
         """
-        stagnation_trigger = early_stop_gen // 10
+        if guess_parameters and all([population_size is None, early_stop_gen is None]):
+            self.population_size, self.early_stop_gen = self.guess_parameters()
+            print(
+                f"Guessed parameters:\nPopulation = {population_size}\nEarly_stop_gen = {early_stop_gen}"
+            )
+        elif guess_parameters and any(
+            [population_size is not None, early_stop_gen is not None]
+        ):
+            raise ValueError(
+                f"Set parameters guess: {self.guess_parameters} and specified population and/or early_stop_gen"
+                f"Select if to guess or specify parameters"
+                f"Population: {population_size}, early_stop_gen: {early_stop_gen}"
+            )
+        elif not guess_parameters and any(
+            [population_size is None, early_stop_gen is None]
+        ):
+            raise ValueError(
+                f"Need to guess or select parameters!"
+                f"guess_parameters: {self.guess_parameters}"
+                f"Population: {population_size}, early_stop_gen: {early_stop_gen}"
+            )
+        else:
+            self.population_size = population_size
+            self.early_stop_gen = early_stop_gen
+        stagnation_trigger = self.early_stop_gen // 10
         rates = AdaptiveRates(
             base_cxpb=self.base_cxpb,
             base_mtpb=self.base_mtpb,
@@ -564,7 +602,7 @@ class GAOptimizer:
             )
 
         try:
-            population = self.toolbox.population(n=population_size)
+            population = self.toolbox.population(n=self.population_size)
             if self.verbose:
                 print(f"{time.ctime()} - Evaluating fitness for initial population...")
 
@@ -711,7 +749,7 @@ class GAOptimizer:
                         f"HV: {round(record['hv'], 3)}"
                     )
 
-                if generations_without_improvement >= early_stop_gen:
+                if generations_without_improvement >= self.early_stop_gen:
                     if self.verbose:
                         print(
                             f"{time.ctime()} - Early stopping at generation {gen} (No HV improvement)."

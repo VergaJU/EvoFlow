@@ -12,6 +12,7 @@ By integrating gene expression data (from `scanpy` AnnData objects) with signali
 - **Data Integration**: Incorporates single-cell gene expression data (`.h5ad`) to weight network capacities.
 - **Flow Analysis**: Computes Maximum Flow from ligands (sources) to target genes (sinks).
 - **Genetic Algorithm Optimization**: Uses `deap` to find the optimal set of nodes to "knock out" to minimize flow (or other objectives) while preserving specific network structures.
+- **GAM Parameter Estimation**: Uses a Generalized Additive Model (GAM) to automatically estimate optimal GA population size and early stopping patience from network features, removing the need for manual tuning.
 - **Visualization**: Generates plots for optimization history, weight distributions, and network topology.
 
 ## Installation
@@ -67,6 +68,7 @@ python -m EvoFlow.cli \
 | Norm Hypervolume | `--norm_hypervolume` | Normalize hypervolume calculation (default: False) |
 | Dynamic Rates | `--dynamic_rates` | Use dynamic mutation/crossover rates (default: True) |
 | Parallel Jobs | `--n_jobs` | Number of parallel jobs for multiprocessing (default: all CPUs) |
+| Guess Params | `--guess_parameters` | Automatically estimate GA parameters using GAM (default: True) |
 
 ### Python API
 
@@ -120,10 +122,18 @@ The project has been refactored into a modular package structure:
 
 ```text
 EvoFlow/
-├── biology.py       # Biological data loading, expression normalization, and graph construction
-├── core.py          # Core Genetic Algorithm (DEAP) and MaxFlow (NetworkX) logic
-├── visualization.py # Plotting utilities
-└── cli.py           # Command-line entry point
+├── biology.py               # Biological data loading, expression normalization, and graph construction
+├── core.py                  # Core Genetic Algorithm (DEAP) and MaxFlow (NetworkX) logic
+├── features_extraction.py   # Graph feature extraction (density, degree distribution, etc.)
+├── gam_preprocessing.py     # Data preprocessing pipeline for GAM training
+├── model.py                 # GAM model wrapper (training, prediction, parameter ranking)
+├── train.py                 # CLI to train the GAM model from collected data
+├── visualization.py         # Plotting utilities
+├── models/                  # Pre-trained models and configuration
+│   ├── config.yaml          # GAM feature configuration
+│   ├── model.pkl            # Trained LinearGAM
+│   └── training_data.csv    # Training dataset
+└── cli.py                   # Command-line entry point
 ```
 
 ### Architecture
@@ -131,7 +141,8 @@ EvoFlow/
 1.  **Preprocessing**: The `BioNetworkPreparer` (`biology.py`) loads data, calculates "percolation" values (normalized gene expression), and builds the initial weighted graph.
 2.  **Topology Setup**: "SuperSource" and "SuperSink" nodes are added to model the flow from Ligands -> Receptors -> Mediators -> Targets.
 3.  **Active Subgraph**: The system extracts only the active subgraph (paths actually connecting sources to sinks) for optimization.
-4.  **Optimization**: The `GAOptimizer` (`core.py`) runs a genetic algorithm to select nodes for removal, optimizing for objectives like reducing flow capacity while minimizing the number of removed nodes.
+4.  **Parameter Estimation (optional)**: The `GAOptimizer` extracts graph features (via `NetworkFeatures` in `features_extraction.py`) and uses a pre-trained GAM model (in `model.py`) to recommend optimal `population_size` and `early_stop_gen` values.
+5.  **Optimization**: The `GAOptimizer` (`core.py`) runs a genetic algorithm to select nodes for removal, optimizing for objectives like reducing flow capacity while minimizing the number of removed nodes.
 
 ## Testing
 

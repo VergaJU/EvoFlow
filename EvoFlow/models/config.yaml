@@ -1,0 +1,40 @@
+# GAM model configuration
+#
+# `term` controls which pygam term type is used for each feature:
+#   s -> smooth spline term      (s(...))
+#   l -> linear term             (l(...))
+#   f -> factor/categorical term (f(...))
+#
+# `constraints` and `lam` are optional and passed straight through to
+# the pygam term constructor (e.g. constraints: monotonic_dec,
+# constraints: monotonic_inc, lam: 0.6). Omit either to use pygam's
+# defaults.
+#
+# Term order here determines term order (and therefore column order)
+# in the model — `features` under training/prediction must match it.
+
+model_path: "model.pkl"
+y_col: "score"
+
+features:
+  - name: log_search_space
+    term: s
+  - name: alpha
+    term: s
+  - name: density
+    term: s
+  - name: clustering_coef
+    term: s
+  - name: patience
+    term: s
+    constraints: monotonic_dec
+  - name: population
+    term: s
+    constraints: monotonic_dec
+    
+training_data: "training_data.csv"
+
+columns_fix_mapping:
+  - columns: "alpha"
+    method: "inplace"
+    fill_value: 0.0

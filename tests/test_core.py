@@ -6,6 +6,7 @@ from EvoFlow.core import (
     evaluate,
     GAOptimizer,
 )
+import numpy as np
 from deap import base, creator
 
 # Ensure creator is setup if running tests in isolation
@@ -116,9 +117,21 @@ def test_pipeline_integration(simple_graph):
         population_size=10,
         generations=2,
         early_stop_gen=10,
+        guess_parameters=False,
         use_multiprocessing=False,  # Important for testing environment without heavy setup
     )
 
     assert isinstance(results, dict)
     assert isinstance(logs, dict)
     assert len(logs) == 2  # 2 generations recorded
+
+
+def test_guess_parameters_direct(complex_graph):
+    sources = ["SuperSource"]
+    sinks = ["SuperSink"]
+    opt = GAOptimizer(complex_graph, sources, sinks)
+    population, patience = opt.guess_parameters()
+    assert isinstance(population, (int, float, np.integer))
+    assert isinstance(patience, (int, float, np.integer))
+    assert population > 0
+    assert patience > 0

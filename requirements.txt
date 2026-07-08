@@ -11,3 +11,4 @@ deap
 matplotlib
 seaborn
 pyyaml
+pygam
