@@ -8,10 +8,15 @@ EvoFlow is a Python-based tool for biological network analysis using MaxFlow min
 ## 2. Directory Structure
 - `EvoFlow/`: Core package
   - `cli.py`: Entry point, argparse-based CLI
-  - `core.py`: GA optimization (DEAP) and MaxFlow (NetworkX)
+  - `core.py`: GA optimization (DEAP), MaxFlow (NetworkX), and GAM parameter guess
   - `biology.py`: Network construction, expression normalization
+  - `features_extraction.py`: Graph feature extraction (`NetworkFeatures` class)
+  - `gam_preprocessing.py`: Data preprocessing pipeline for GAM training (`Preprocessing` class)
+  - `model.py`: GAM model wrapper with training, prediction, and ranking
+  - `train.py`: CLI to retrain the GAM model from collected data
   - `visualization.py`: Plotting utilities
   - `utils.py`: I/O helpers
+  - `models/`: Pre-trained GAM model and config
 - `tests/`: Unit tests (pytest)
 
 ## 3. Commands
@@ -64,6 +69,11 @@ pre-commit install
 - **Graph preprocessing**: Adds "SuperSource" and "SuperSink" nodes for flow computation.
 - **Active subgraph**: Only paths connecting ligands to targets are optimized.
 - **Output files**: Prefixed with input filename (via `utils.py`)
+- **GAM Parameter Estimation**: `GAOptimizer.guess_parameters()` extracts 4 graph features (log search space, degree exponent `alpha`, density, clustering coefficient) via `NetworkFeatures` and feeds them to a pre-trained `LinearGAM` (pyGAM) which predicts the best `(population_size, patience)` pair.
+- **Feature pipeline**: `NetworkFeatures` → `pd.DataFrame` → `GAM.rank()` → grid search over patience/population → best recommendation.
+- **GAM config**: Model architecture is defined in `models/config.yaml` (feature terms, constraints). The config file is read via `importlib.resources` — requires `models/__init__.py` to be present.
+- **Model file**: `models/model.pkl` stores a dict `{"model": <LinearGAM>, "scores": <cv_results_df>}`. `load_model()` unwraps the dict automatically for backward compatibility.
+- **Retraining**: Run `train.py` to retrain the GAM model on new data. This performs 10-fold CV grid search and saves the model + scores.
 
 ## 6. Gotchas
 

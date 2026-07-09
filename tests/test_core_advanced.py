@@ -139,7 +139,11 @@ def test_ga_dynamic_mode(simple_graph):
 
     # Run for a few generations
     results, logs, pop, norm = opt.run(
-        population_size=10, generations=5, early_stop_gen=10, use_multiprocessing=False
+        population_size=10,
+        generations=5,
+        early_stop_gen=10,
+        use_multiprocessing=False,
+        guess_parameters=False,
     )
 
     assert len(logs) == 5
@@ -163,7 +167,11 @@ def test_ga_delta_penalty(simple_graph):
 
     # Run for a few generations
     results, logs, pop, norm = opt.run(
-        population_size=10, generations=2, early_stop_gen=10, use_multiprocessing=False
+        population_size=10,
+        generations=2,
+        early_stop_gen=10,
+        use_multiprocessing=False,
+        guess_parameters=False,
     )
 
     assert len(logs) == 2
