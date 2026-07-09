@@ -62,6 +62,9 @@ pre-commit install
 
 - **GA**: Uses DEAP with global `creator` registration. `GAOptimizer` in `core.py` handles this.
 - **Evaluation**: Designed for `multiprocessing` - use top-level functions (picklable).
+- **Caching**: Evaluation results are cached in the main process via `SmartCacheMap` using `tuple(ind)` keys.
+  Cache hits avoid IPC entirely. The cache is local to each `run()` call and lives for its duration.
+- **Partial application**: `functools.partial` is used to bind evaluation parameters (graph, expression data, etc.) into a single top-level callable, keeping the signature picklable for multiprocessing.
 - **Parallelism**: `GAOptimizer` accepts `n_jobs` to control the number of parallel worker processes. `_get_n_jobs()` validates the value (raises `ValueError` if < 1, clamps to `cpu_count()` with a warning if too large).
 - **Graph preprocessing**: Adds "SuperSource" and "SuperSink" nodes for flow computation.
 - **Active subgraph**: Only paths connecting ligands to targets are optimized.

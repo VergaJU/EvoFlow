@@ -10,6 +10,8 @@ import pandas as pd
 from EvoFlow.features_extraction import NetworkFeatures
 from EvoFlow.model import GAM
 import math
+import functools
+
 # --- Helper Functions (Graph Algorithms) ---
 
 
@@ -130,7 +132,7 @@ def get_nodes(removable_nodes, individual):
 # --- Evaluation Function (Must be top-level for multiprocessing) ---
 
 
-def evaluate(individual, G, removable_nodes, ssource, ssink, shared_cache):
+def evaluate(individual, G, removable_nodes, ssource, ssink):
     """
     Fitness Function.
     Objectives (minimized):
@@ -140,11 +142,6 @@ def evaluate(individual, G, removable_nodes, ssource, ssink, shared_cache):
     """
     # Identify nodes to remove
     removed_nodes_names = set(get_nodes(removable_nodes, individual))
-
-    # --- CACHE CHECK ---
-    cache_key = frozenset(removed_nodes_names)
-    if cache_key in shared_cache:
-        return shared_cache[cache_key], {}  # Returns all 3 objectives instantly!
 
     # --- GRAPH CREATION ---
     nodes_to_keep = [n for n in G.nodes if n not in removed_nodes_names]
@@ -167,11 +164,7 @@ def evaluate(individual, G, removable_nodes, ssource, ssink, shared_cache):
     # 3. Cost (Number of nodes removed)
     cost = len(removed_nodes_names)
 
-    # --- SAVE TO CACHE ---
-    result = (flow_value, cost, redundancy)
-    shared_cache[cache_key] = result
-
-    return result, flow_dict
+    return (flow_value, cost, redundancy), flow_dict
 
 
 # --- Constraint Helpers ---
@@ -187,9 +180,7 @@ def penalty_distance(individual, max_remove):
     return float((individual.count(0) - max_remove) ** 2)
 
 
-def constrained_evaluate(
-    individual, G, removable_nodes, ssource, ssink, max_remove, shared_cache
-):
+def constrained_evaluate(individual, G, removable_nodes, ssource, ssink, max_remove):
     """
     A manual wrapper that mimics DeltaPenalty but is picklable.
     """
@@ -200,7 +191,7 @@ def constrained_evaluate(
         return tuple(p + dist for p in penalty_base), {}
 
     # Otherwise, return actual fitness
-    return evaluate(individual, G, removable_nodes, ssource, ssink, shared_cache)
+    return evaluate(individual, G, removable_nodes, ssource, ssink)
 
 
 # --- Genotypic diversity ----
@@ -383,6 +374,62 @@ class MockIndividual:
         self.fitness = type("Fitness", (), {"values": values})
 
 
+class SmartCacheMap:
+    """Orchestrator-level cache wrapper for evaluation dispatch.
+
+    Checks a local dictionary before dispatching work to workers
+    (multiprocessing pool or sequential), avoiding redundant computation
+    for repeated individuals. Cache hits incur zero IPC overhead.
+    """
+
+    def __init__(self, evaluation_func, cache=None, pool=None):
+        self.evaluation_func = evaluation_func
+        self.cache = cache if cache is not None else {}
+        self.pool = pool
+
+    def __call__(self, func, iterable):
+        """Dispatch evaluation with caching.
+
+        Args:
+            func: The evaluation function (registered in toolbox, ignored here
+                  since self.evaluation_func is used directly).
+            iterable: List of individuals to evaluate.
+
+        Returns:
+            List of (fitness_tuple, flow_dict) results.
+        """
+        results = [None] * len(iterable)
+        to_compute_indices = []
+        to_compute_values = []
+
+        # Step A: Check local cache in main process (instant, zero IPC)
+        for i, ind in enumerate(iterable):
+            key = tuple(ind)
+            if key in self.cache:
+                results[i] = self.cache[key]
+            else:
+                to_compute_indices.append(i)
+                to_compute_values.append(ind)
+
+        # Step B: Dispatch only cache misses to workers
+        if to_compute_values:
+            if self.pool is not None:
+                computed_results = self.pool.map(
+                    self.evaluation_func, to_compute_values
+                )
+            else:
+                computed_results = [self.evaluation_func(v) for v in to_compute_values]
+
+            # Step C: Update cache and fill results
+            for i, res in enumerate(computed_results):
+                real_idx = to_compute_indices[i]
+                val = to_compute_values[i]
+                self.cache[tuple(val)] = res
+                results[real_idx] = res
+
+        return results
+
+
 # --- GA Engine Class ---
 
 
@@ -433,14 +480,12 @@ class GAOptimizer:
         self.N = len(self.removable_nodes)
 
         # Calculate Baselines for Normalization
-        # (We pass a standard empty dict here because the baseline only evaluates 1 individual)
         (self.base_flow, _, self.base_redundancy), _ = evaluate(
             [1] * self.N,  # Individual where all nodes are kept (all 1s)
             self.G,
             self.removable_nodes,
             "SuperSource",
             "SuperSink",
-            shared_cache={},
         )
 
         # Handle cases where base values might be 0 to avoid DivisionByZero
@@ -564,42 +609,40 @@ class GAOptimizer:
             stagnation_trigger=stagnation_trigger,
         )
 
-        # FIX 3: Initialize pool and manager variables in the local scope
-        # so the `finally` block doesn't crash on UnboundLocalError
         pool = None
-        manager = None
-        shared_cache = {}
+        local_cache = {}
 
-        if self.use_multiprocessing:
-            manager = multiprocessing.Manager()
-            shared_cache = manager.dict()  # Real inter-process shared memory
-            pool = multiprocessing.Pool(processes=self._get_n_jobs())
-            self.toolbox.register("map", pool.map)
-        else:
-            self.toolbox.register("map", map)
-
-        # FIX 4: Dynamically register evaluate to inject the proper shared_cache
+        # Create evaluation function without shared_cache
         if self.delta_penalty:
-            self.toolbox.register(
-                "evaluate",
+            eval_func = functools.partial(
                 constrained_evaluate,
                 G=self.SG,
                 removable_nodes=self.removable_nodes,
                 ssource="SuperSource",
                 ssink="SuperSink",
                 max_remove=self.max_remove,
-                shared_cache=shared_cache,
             )
         else:
-            self.toolbox.register(
-                "evaluate",
+            eval_func = functools.partial(
                 evaluate,
                 G=self.SG,
                 removable_nodes=self.removable_nodes,
                 ssource="SuperSource",
                 ssink="SuperSink",
-                shared_cache=shared_cache,
             )
+
+        if self.use_multiprocessing:
+            pool = multiprocessing.Pool(processes=self._get_n_jobs())
+            cache_aware_map = SmartCacheMap(
+                evaluation_func=eval_func, cache=local_cache, pool=pool
+            )
+        else:
+            cache_aware_map = SmartCacheMap(
+                evaluation_func=eval_func, cache=local_cache, pool=None
+            )
+
+        self.toolbox.register("map", cache_aware_map)
+        self.toolbox.register("evaluate", eval_func)
 
         try:
             population = self.toolbox.population(n=self.population_size)
@@ -757,13 +800,10 @@ class GAOptimizer:
                     break
 
         finally:
-            # FIX 8: Safe cleanup to prevent memory leaks or UnboundLocalError
             if self.use_multiprocessing:
                 if pool is not None:
                     pool.close()
                     pool.join()
-                if manager is not None:
-                    manager.shutdown()
 
         results, norm = select_candidates(
             population=population, removable_nodes=self.removable_nodes
