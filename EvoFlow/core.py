@@ -577,11 +577,13 @@ class GAOptimizer:
         """
         Runs the Genetic Algorithm.
         """
+        self.verbose = verbose
         if guess_parameters and all([population_size is None, early_stop_gen is None]):
             self.population_size, self.early_stop_gen = self.guess_parameters_gam()
-            print(
-                f"Guessed parameters:\nPopulation = {self.population_size}\nEarly_stop_gen = {self.early_stop_gen}"
-            )
+            if self.verbose:
+                print(
+                    f"Guessed parameters:\nPopulation = {self.population_size}\nEarly_stop_gen = {self.early_stop_gen}"
+                )
         elif guess_parameters and any(
             [population_size is not None, early_stop_gen is not None]
         ):
