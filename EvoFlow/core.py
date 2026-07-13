@@ -554,7 +554,7 @@ class GAOptimizer:
             return self.n_jobs
         return multiprocessing.cpu_count()
 
-    def guess_parameters(self):
+    def guess_parameters_gam(self):
         """
         guess fatures using GAM model
         """
@@ -578,15 +578,15 @@ class GAOptimizer:
         Runs the Genetic Algorithm.
         """
         if guess_parameters and all([population_size is None, early_stop_gen is None]):
-            self.population_size, self.early_stop_gen = self.guess_parameters()
+            self.population_size, self.early_stop_gen = self.guess_parameters_gam()
             print(
-                f"Guessed parameters:\nPopulation = {population_size}\nEarly_stop_gen = {early_stop_gen}"
+                f"Guessed parameters:\nPopulation = {self.population_size}\nEarly_stop_gen = {self.early_stop_gen}"
             )
         elif guess_parameters and any(
             [population_size is not None, early_stop_gen is not None]
         ):
             raise ValueError(
-                f"Set parameters guess: {self.guess_parameters} and specified population and/or early_stop_gen"
+                f"Set parameters guess: {guess_parameters} and specified population and/or early_stop_gen"
                 f"Select if to guess or specify parameters"
                 f"Population: {population_size}, early_stop_gen: {early_stop_gen}"
             )
@@ -595,7 +595,7 @@ class GAOptimizer:
         ):
             raise ValueError(
                 f"Need to guess or select parameters!"
-                f"guess_parameters: {self.guess_parameters}"
+                f"guess_parameters: {guess_parameters}"
                 f"Population: {population_size}, early_stop_gen: {early_stop_gen}"
             )
         else:
