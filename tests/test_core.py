@@ -127,7 +127,7 @@ def test_guess_parameters_direct(complex_graph):
     sources = ["SuperSource"]
     sinks = ["SuperSink"]
     opt = GAOptimizer(complex_graph, sources, sinks)
-    population, patience = opt.guess_parameters()
+    population, patience = opt.guess_parameters_gam()
     assert isinstance(population, (int, float, np.integer))
     assert isinstance(patience, (int, float, np.integer))
     assert population > 0
