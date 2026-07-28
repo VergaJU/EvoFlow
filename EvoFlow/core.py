@@ -12,6 +12,9 @@ from EvoFlow.features_extraction import NetworkFeatures
 from EvoFlow.model import GAM
 import math
 import functools
+import os
+import json
+
 
 _worker_G = None
 # --- Helper Functions (Graph Algorithms) ---
@@ -310,6 +313,80 @@ def select_for_diversification(population, n):
     return sorted_front[:n]  # Return the most crowded ones to mutate
 
 
+# --- class for loging on disk ---
+
+
+class DiskLogger:
+    """
+    Streams per-generation records to a JSONL file instead of keeping
+    them in memory. `visited_nodes` is stored as a diff (newly-visited
+    nodes only) because the set only ever grows across generations —
+    storing the full list every generation is O(N) per gen for no reason.
+    """
+
+    def __init__(self, log_path, flush_every=10):
+        self.log_path = log_path
+        self.flush_every = flush_every
+        self._fh = open(log_path, "w", buffering=1)  # line-buffered
+        self._n_since_flush = 0
+        self._prev_visited = set()
+
+    def _to_native(self, obj):
+        """Recursively convert numpy scalars/arrays so json.dumps doesn't choke."""
+        if isinstance(obj, dict):
+            return {k: DiskLogger._to_native(v) for k, v in obj.items()}
+        if isinstance(obj, (list, tuple)):
+            return [DiskLogger._to_native(v) for v in obj]
+        if isinstance(obj, np.generic):
+            return obj.item()
+        if isinstance(obj, np.ndarray):
+            return obj.tolist()
+        return obj
+
+    def log_generation(self, gen, record):
+        record = dict(record)  # don't mutate caller's dict
+
+        if "visited_nodes" in record:
+            current = set(record["visited_nodes"])
+            newly_visited = current - self._prev_visited
+            self._prev_visited = current
+            record["visited_nodes"] = sorted(newly_visited)  # diff only
+
+        record = self._to_native(record)
+        record["gen"] = gen
+
+        self._fh.write(json.dumps(record) + "\n")
+        self._n_since_flush += 1
+        if self._n_since_flush >= self.flush_every:
+            self._fh.flush()
+            os.fsync(self._fh.fileno())
+            self._n_since_flush = 0
+
+    def close(self):
+        self._fh.flush()
+        os.fsync(self._fh.fileno())
+        self._fh.close()
+
+
+def load_logs(log_path):
+    """
+    Reconstructs the full {gen: record} dict from a JSONL log file,
+    re-expanding visited_nodes from cumulative diffs. Use this after
+    the run, for analysis/plotting — not during the run.
+    """
+    logs = {}
+    cumulative = set()
+    with open(log_path) as f:
+        for line in f:
+            rec = json.loads(line)
+            gen = rec.pop("gen")
+            if "visited_nodes" in rec:
+                cumulative |= set(rec["visited_nodes"])
+                rec["visited_nodes"] = sorted(cumulative)
+            logs[gen] = rec
+    return logs
+
+
 # --- Create class to handle adaptive rates ---
 
 
@@ -604,12 +681,16 @@ class GAOptimizer:
         tol=1e-6,
         verbose=False,
         guess_parameters=True,
+        log_path=None,
+        log_flush_every=10,
         **kwargs,
     ):
         """
         Runs the Genetic Algorithm.
         """
+
         self.verbose = verbose
+
         if guess_parameters and all([population_size is None, early_stop_gen is None]):
             self.population_size, self.early_stop_gen = self.guess_parameters_gam()
             if self.verbose:
@@ -642,6 +723,14 @@ class GAOptimizer:
             base_indpb=self.base_indpb,
             stagnation_trigger=stagnation_trigger,
         )
+
+        # setup logging file
+
+        if log_path is None:
+            log_path = f"ga_run_{int(time.time())}.jsonl"
+        disk_logger = DiskLogger(log_path, flush_every=log_flush_every)
+        self.log_path = log_path  # so callers can find it after run()
+        summary_logs = {}
 
         pool = None
         local_cache = {}
@@ -695,7 +784,6 @@ class GAOptimizer:
             ref_point = (1.1, 1.1, 1.1)
             best_hv = 0.0
             generations_without_improvement = 0
-            logs = {}
             if self.verbose:
                 print(
                     f"{time.ctime()} - Starting evolution for {generations} generations"
@@ -812,7 +900,11 @@ class GAOptimizer:
                 record["cxpb"] = rates.cxpb
                 record["mtpb"] = rates.mtpb
                 record["indpb"] = rates.indpb
-                logs[gen] = record
+
+                disk_logger.log_generation(gen, record)
+                summary_logs[gen] = {
+                    k: v for k, v in record.items() if k != "visited_nodes"
+                }
 
                 if self.verbose:
                     # FIX 7: Fixed KeyError. record["min"] doesn't exist anymore!
@@ -830,6 +922,7 @@ class GAOptimizer:
                     break
 
         finally:
+            disk_logger.close()
             if self.use_multiprocessing:
                 if pool is not None:
                     pool.close()
@@ -839,4 +932,4 @@ class GAOptimizer:
             population=population, removable_nodes=self.removable_nodes
         )
 
-        return results, logs, population, norm
+        return results, summary_logs, population, norm
