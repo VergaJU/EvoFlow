@@ -12,6 +12,8 @@ from EvoFlow.model import GAM
 import math
 import functools
 
+
+_worker_G = None
 # --- Helper Functions (Graph Algorithms) ---
 
 
@@ -194,7 +196,35 @@ def constrained_evaluate(individual, G, removable_nodes, ssource, ssink, max_rem
     return evaluate(individual, G, removable_nodes, ssource, ssink)
 
 
+def __init_worker(G):
+    global _worker_G
+    _worker_G = G
+
+
 # --- Genotypic diversity ----
+
+
+def evaluate_global(
+    individual, removable_nodes, ssource, ssink, max_remove=None, constrained=False
+):
+    if constrained:
+        return constrained_evaluate(
+            individual=individual,
+            G=_worker_G,
+            removable_nodes=removable_nodes,
+            ssource=ssource,
+            ssink=ssink,
+            max_remove=max_remove,
+        )
+    else:
+        return evaluate(
+            individual=individual,
+            G=_worker_G,
+            removable_nodes=removable_nodes,
+            ssource=ssource,
+            ssink=ssink,
+            max_remove=max_remove,
+        )
 
 
 def genotypic_diversity(population):
@@ -424,8 +454,10 @@ class SmartCacheMap:
             for i, res in enumerate(computed_results):
                 real_idx = to_compute_indices[i]
                 val = to_compute_values[i]
-                self.cache[tuple(val)] = res
-                results[real_idx] = res
+                fit, _flow = res
+                cached = (fit, {})
+                self.cache[tuple(val)] = cached
+                results[real_idx] = cached
 
         return results
 
@@ -615,26 +647,21 @@ class GAOptimizer:
         local_cache = {}
 
         # Create evaluation function without shared_cache
-        if self.delta_penalty:
-            eval_func = functools.partial(
-                constrained_evaluate,
-                G=self.SG,
-                removable_nodes=self.removable_nodes,
-                ssource="SuperSource",
-                ssink="SuperSink",
-                max_remove=self.max_remove,
-            )
-        else:
-            eval_func = functools.partial(
-                evaluate,
-                G=self.SG,
-                removable_nodes=self.removable_nodes,
-                ssource="SuperSource",
-                ssink="SuperSink",
-            )
+        eval_func = functools.partial(
+            evaluate_global,
+            removable_nodes=self.removable_nodes,
+            ssource="SuperSource",
+            ssink="SuperSink",
+            max_remove=self.max_remove,
+            constrained=self.delta_penalty,
+        )
 
         if self.use_multiprocessing:
-            pool = multiprocessing.Pool(processes=self._get_n_jobs())
+            pool = multiprocessing.Pool(
+                processes=self._get_n_jobs(),
+                initializer=__init_worker,
+                initargs=(self.SG,),
+            )
             cache_aware_map = SmartCacheMap(
                 evaluation_func=eval_func, cache=local_cache, pool=pool
             )
