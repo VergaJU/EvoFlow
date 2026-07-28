@@ -209,3 +209,5 @@ __marimo__/
 *.config
 *.local
 data/
+
+ga*.jsonl

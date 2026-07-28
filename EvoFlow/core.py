@@ -197,7 +197,7 @@ def constrained_evaluate(individual, G, removable_nodes, ssource, ssink, max_rem
     return evaluate(individual, G, removable_nodes, ssource, ssink)
 
 
-def __init_worker(G):
+def _init_worker(G):
     global _worker_G
     _worker_G = G
 
@@ -224,7 +224,6 @@ def evaluate_global(
             removable_nodes=removable_nodes,
             ssource=ssource,
             ssink=ssink,
-            max_remove=max_remove,
         )
 
 
@@ -331,7 +330,8 @@ class DiskLogger:
         self._n_since_flush = 0
         self._prev_visited = set()
 
-    def _to_native(self, obj):
+    @staticmethod
+    def _to_native(obj):
         """Recursively convert numpy scalars/arrays so json.dumps doesn't choke."""
         if isinstance(obj, dict):
             return {k: DiskLogger._to_native(v) for k, v in obj.items()}
@@ -748,7 +748,7 @@ class GAOptimizer:
         if self.use_multiprocessing:
             pool = multiprocessing.Pool(
                 processes=self._get_n_jobs(),
-                initializer=__init_worker,
+                initializer=_init_worker,
                 initargs=(self.SG,),
                 maxtasksperchild=200,
             )
