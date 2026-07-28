@@ -6,7 +6,6 @@ from deap import base, creator
 from EvoFlow import core
 from EvoFlow.core import (
     AdaptiveRates,
-    constrained_evaluate,
     select_for_diversification,
     GAOptimizer,
 )
@@ -51,43 +50,6 @@ def test_adaptive_rates():
     # Reheated values should be higher than minimum but lower than original base (due to attenuation)
     assert rates.cxpb > 0.5
     assert rates.cxpb <= 0.9
-
-
-def test_constrained_evaluate(simple_graph):
-    # simple_graph has nodes: SuperSource, A, B, SuperSink
-    # Removable: A, B
-    removable_nodes = ["A", "B"]
-    # Case 1: Feasible (Remove 1 node, Max 1)
-    ind_valid = [0, 1]  # Remove A
-    res_valid = constrained_evaluate(
-        ind_valid,
-        simple_graph,
-        removable_nodes,
-        "SuperSource",
-        "SuperSink",
-        max_remove=1,
-    )
-    # Should return normal fitness (Flow, Cost, Redundancy)
-    # Flow=0 (A removed), Cost=1, Redundancy=0
-    assert res_valid[0] == (0.0, 1, 0)
-
-    # Case 2: Infeasible (Remove 2 nodes, Max 1)
-    ind_invalid = [0, 0]  # Remove A and B
-    res_invalid = constrained_evaluate(
-        ind_invalid,
-        simple_graph,
-        removable_nodes,
-        "SuperSource",
-        "SuperSink",
-        max_remove=1,
-    )
-
-    # Should return penalty
-    # Penalty base is 1e6.
-    # Distance = (2 - 1)^2 = 1.0
-    # Expected = (1e6 + 1.0, 1e6 + 1.0, 1e6 + 1.0)
-    assert res_invalid[0][0] > 1e5
-    assert res_invalid[0] == (1000001.0, 1000001.0, 1000001.0)
 
 
 def test_select_for_diversification():

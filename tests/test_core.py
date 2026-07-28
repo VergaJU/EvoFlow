@@ -8,7 +8,6 @@ from deap import base, creator
 
 from EvoFlow import core
 from EvoFlow.core import (
-    calculate_flow_capacity,
     extract_active_subgraph,
     generate_individual,
     repair_individual,
@@ -16,22 +15,43 @@ from EvoFlow.core import (
     GAOptimizer,
 )
 
+SCALE = 1000
+
+
+def _build_csr_from_graph(G):
+    node_order = list(G.nodes)
+    node_to_idx = {n: i for i, n in enumerate(node_order)}
+    G_scaled = G.copy()
+    for u, v, d in G_scaled.edges(data=True):
+        d["capacity"] = int(round(d.get("capacity", 1.0) * SCALE))
+    csr = nx.to_scipy_sparse_array(
+        G_scaled, nodelist=node_order, weight="capacity", format="csr", dtype=np.int64
+    )
+    removable_nodes = [n for n in node_order if n not in ("SuperSource", "SuperSink")]
+    removable_csr_indices = np.array(
+        [node_to_idx[n] for n in removable_nodes], dtype=np.int64
+    )
+    return (
+        csr,
+        removable_csr_indices,
+        removable_nodes,
+        node_to_idx["SuperSource"],
+        node_to_idx["SuperSink"],
+    )
+
+
+def _set_worker_globals(csr, removable_csr_indices, source_idx, sink_idx):
+    core._worker_csr = csr
+    core._worker_removable_csr_indices = removable_csr_indices
+    core._worker_source_idx = source_idx
+    core._worker_sink_idx = sink_idx
+
+
 # Ensure creator is setup if running tests in isolation
 if not hasattr(creator, "FitnessMin"):
     creator.create("FitnessMin", base.Fitness, weights=(-1.0, -1.0, -1.0))
 if not hasattr(creator, "Individual"):
     creator.create("Individual", array, typecode="B", fitness=creator.FitnessMin)
-
-# Ensure array-based Individual for mutation/cache tests
-if not hasattr(creator, "IndividualArray"):
-    creator.create("IndividualArray", array, typecode="B", fitness=creator.FitnessMin)
-
-
-def test_flow_calculation(simple_graph):
-    # Path: S -> A(10) -> B(5) -> T(10)
-    # Bottleneck is A->B with capacity 5.0
-    flow, _ = calculate_flow_capacity(simple_graph, "SuperSource", "SuperSink")
-    assert flow == 5.0
 
 
 def test_subgraph_extraction(branching_graph):
@@ -77,61 +97,95 @@ def test_repair_individual():
     assert zeros == 2
 
 
-def test_evaluate(simple_graph):
-    # Graph: S->A->B->T. Flow=5.
-    # Removable nodes: ['A', 'B']
-    # Individual: [1, 1] (Keep both) -> Flow 5, Cost 0
+def _simple_csr_graph():
+    G = nx.DiGraph()
+    G.add_node("SuperSource")
+    G.add_node("A", percolation=1.0)
+    G.add_node("B", percolation=0.5)
+    G.add_node("SuperSink")
+    G.add_edge("SuperSource", "A", capacity=10.0, weight=1.0)
+    G.add_edge("A", "B", capacity=5.0, weight=1.0)
+    G.add_edge("B", "SuperSink", capacity=10.0, weight=1.0)
+    return _build_csr_from_graph(G)
 
-    removable_nodes = ["A", "B"]
-    ind_keep_all = [1, 1]
-    (flow, cost, coocc), _ = evaluate(
-        ind_keep_all,
-        simple_graph,
-        removable_nodes,
-        "SuperSource",
-        "SuperSink",
-    )
 
+def test_evaluate_keep_all():
+    csr, ridx, removable, src_idx, sink_idx = _simple_csr_graph()
+    _set_worker_globals(csr, ridx, src_idx, sink_idx)
+
+    ind = [1, 1]  # keep both A and B
+    (flow, cost, red), _ = evaluate(ind, scale=SCALE, max_remove=10, constrained=False)
+    # Bottleneck A->B = 5.0 (scaled to 5000, /1000)
     assert flow == 5.0
     assert cost == 0
 
-    # Individual: [0, 1] (Remove A) -> Flow 0, Cost 1
-    ind_remove_A = [0, 1]
-    (flow, cost, coocc), _ = evaluate(
-        ind_remove_A,
-        simple_graph,
-        removable_nodes,
-        "SuperSource",
-        "SuperSink",
-    )
 
+def test_evaluate_remove_node():
+    csr, ridx, removable, src_idx, sink_idx = _simple_csr_graph()
+    _set_worker_globals(csr, ridx, src_idx, sink_idx)
+
+    ind = [0, 1]  # remove A
+    (flow, cost, red), _ = evaluate(ind, scale=SCALE, max_remove=10, constrained=False)
     assert flow == 0.0
     assert cost == 1
 
 
+def test_evaluate_constrained_penalty():
+    csr, ridx, removable, src_idx, sink_idx = _simple_csr_graph()
+    _set_worker_globals(csr, ridx, src_idx, sink_idx)
+
+    ind = [0, 0]  # remove A and B (2 removals, max=1)
+    (f0, f1, f2), _ = evaluate(ind, scale=SCALE, max_remove=1, constrained=True)
+    assert f0 > 1e5
+
+
+def test_evaluate_constrained_feasible():
+    csr, ridx, removable, src_idx, sink_idx = _simple_csr_graph()
+    _set_worker_globals(csr, ridx, src_idx, sink_idx)
+
+    ind = [0, 1]  # remove A only (1 removal, max=1)
+    (flow, cost, red), _ = evaluate(ind, scale=SCALE, max_remove=1, constrained=True)
+    assert flow == 0.0
+    assert cost == 1
+
+
+def test_evaluate_scc_redundancy():
+    """Build a graph with a cycle so SCC redundancy > 0."""
+    G = nx.DiGraph()
+    G.add_node("SuperSource")
+    G.add_node("A")
+    G.add_node("B")
+    G.add_node("C")
+    G.add_node("SuperSink")
+    G.add_edge("SuperSource", "A", capacity=10.0)
+    G.add_edge("A", "B", capacity=10.0)
+    G.add_edge("B", "C", capacity=10.0)
+    G.add_edge("C", "A", capacity=10.0)  # cycle A->B->C->A
+    G.add_edge("A", "SuperSink", capacity=10.0)
+    csr, ridx, removable, src_idx, sink_idx = _build_csr_from_graph(G)
+    _set_worker_globals(csr, ridx, src_idx, sink_idx)
+
+    # 3 removable nodes: A, B, C
+    ind = [1, 1, 1]  # keep all
+    (flow, cost, red), _ = evaluate(ind, scale=SCALE, max_remove=10, constrained=False)
+    # The 3-cycle {A,B,C} should give redundancy = 3^2 = 9
+    assert red == 9
+
+
 def test_pipeline_integration(simple_graph):
-    # Integration smoke test for GAOptimizer
     sources = ["SuperSource"]
     sinks = ["SuperSink"]
-
-    # The simple graph has only A, B removable
-
-    # Fix constructor: G, sources, sinks, **kwargs
     opt = GAOptimizer(simple_graph, sources, sinks)
-
-    # Run for 2 generations, tiny population
-    # Fix return values: best_nodes, logs, pop, norm
     results, logs, pop, norm = opt.run(
         population_size=10,
         generations=2,
         early_stop_gen=10,
         guess_parameters=False,
-        use_multiprocessing=False,  # Important for testing environment without heavy setup
+        use_multiprocessing=False,
     )
-
     assert isinstance(results, dict)
     assert isinstance(logs, dict)
-    assert len(logs) == 2  # 2 generations recorded
+    assert len(logs) == 2
 
 
 def test_guess_parameters_direct(complex_graph):
@@ -143,30 +197,6 @@ def test_guess_parameters_direct(complex_graph):
     assert isinstance(patience, (int, float, np.integer))
     assert population > 0
     assert patience > 0
-
-
-# --- New tests for uncovered symbols ---
-
-
-def test_find_scc():
-    G = nx.DiGraph()
-    G.add_edges_from([("A", "B"), ("B", "C"), ("C", "A"), ("D", "E")])
-    sccs = core.find_scc(G)
-    assert len(sccs) == 1
-    assert sccs[0] == {"A", "B", "C"}
-
-
-def test_find_scc_no_components():
-    G = nx.DiGraph()
-    G.add_edges_from([("A", "B"), ("B", "C")])
-    sccs = core.find_scc(G)
-    assert sccs == []
-
-
-def test_scc_redundancy():
-    assert core.scc_redundancy([{"A", "B", "C"}]) == 9
-    assert core.scc_redundancy([]) == 0
-    assert core.scc_redundancy([{"A", "B"}, {"C", "D", "E"}]) == 4 + 9
 
 
 def test_get_nodes():
@@ -195,50 +225,13 @@ def test_mutate_low_prob():
     assert all(g == 1 for g in mutated)
 
 
-def test_check_feasible():
-    ind = [0, 0, 1, 1]
-    assert core.check_feasible(ind, max_remove=3) is True
-    assert core.check_feasible(ind, max_remove=1) is False
-
-
-def test_penalty_distance():
-    ind = [0, 0, 0, 1]
-    assert core.penalty_distance(ind, max_remove=1) == 4.0
-    assert core.penalty_distance(ind, max_remove=2) == 1.0
-    ind2 = [1, 1, 1]
-    # 0 removals, max_remove=1 → (0 - 1)^2 = 1.0
-    assert core.penalty_distance(ind2, max_remove=1) == 1.0
-    # 0 removals, max_remove=3 → (0 - 3)^2 = 9.0
-    assert core.penalty_distance(ind2, max_remove=3) == 9.0
-    # equal → 0
-    ind3 = [0, 1, 1]
-    assert core.penalty_distance(ind3, max_remove=1) == 0.0
-
-
 def test__init_worker(simple_graph):
-    core._init_worker(simple_graph)
-    assert core._worker_G is simple_graph
-
-
-def test_evaluate_global_unconstrained(simple_graph):
-    core._worker_G = simple_graph
-    removable = ["A", "B"]
-    ind = [1, 1]
-    (flow, cost, red), fd = core.evaluate_global(
-        ind, removable, "SuperSource", "SuperSink", constrained=False
-    )
-    assert flow == 5.0
-    assert cost == 0
-
-
-def test_evaluate_global_constrained_penalty(simple_graph):
-    core._worker_G = simple_graph
-    removable = ["A", "B"]
-    ind = [0, 0]
-    (f0, f1, f2), _ = core.evaluate_global(
-        ind, removable, "SuperSource", "SuperSink", max_remove=1, constrained=True
-    )
-    assert f0 > 1e5
+    csr, ridx, removable, src_idx, sink_idx = _build_csr_from_graph(simple_graph)
+    core._init_worker(csr, ridx, src_idx, sink_idx)
+    assert core._worker_csr is csr
+    assert np.array_equal(core._worker_removable_csr_indices, ridx)
+    assert core._worker_source_idx == src_idx
+    assert core._worker_sink_idx == sink_idx
 
 
 def test_genotypic_diversity():

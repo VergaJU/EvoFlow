@@ -14,27 +14,29 @@ import math
 import functools
 import os
 import json
+from scipy.sparse.csgraph import maximum_flow, connected_components
 
 
-_worker_G = None
+_worker_csr = None
+_worker_node_to_idx = None
+_worker_removable_csr_indices = None
+_worker_source_idx = None
+_worker_sink_idx = None
+
+
+def _init_worker(csr, removable_csr_indices, source_idx, sink_idx):
+    global \
+        _worker_csr, \
+        _worker_removable_csr_indices, \
+        _worker_source_idx, \
+        _worker_sink_idx
+    _worker_csr = csr
+    _worker_removable_csr_indices = removable_csr_indices
+    _worker_source_idx = source_idx
+    _worker_sink_idx = sink_idx
+
+
 # --- Helper Functions (Graph Algorithms) ---
-
-
-def find_scc(G):
-    """
-    Find strongly connected components in a directed graph.
-    Returns a list of sets, where each set contains nodes in a component (len > 1).
-    """
-    sccs = [i for i in nx.strongly_connected_components(G) if len(i) > 1]
-    return sccs
-
-
-def scc_redundancy(sccs):
-    redundancy = 0
-    for scc in sccs:
-        if len(scc) > 1:
-            redundancy += len(scc) ** 2
-    return redundancy
 
 
 def calculate_flow_capacity(G, ssource, ssink):
@@ -135,7 +137,7 @@ def get_nodes(removable_nodes, individual):
 # --- Evaluation Function (Must be top-level for multiprocessing) ---
 
 
-def evaluate(individual, G, removable_nodes, ssource, ssink):
+def evaluate(individual, scale, max_remove, constrained):
     """
     Fitness Function.
     Objectives (minimized):
@@ -143,88 +145,36 @@ def evaluate(individual, G, removable_nodes, ssource, ssink):
     2. Number of Removed Nodes
     3. Co-occurrence in SCCs
     """
-    # Identify nodes to remove
-    removed_nodes_names = set(get_nodes(removable_nodes, individual))
+    removed_mask = ~np.array(individual, dtype=bool)
+    removed_csr_idx = _worker_removable_csr_indices[removed_mask]
 
-    # --- GRAPH CREATION ---
-    nodes_to_keep = [n for n in G.nodes if n not in removed_nodes_names]
-    G_sub = G.subgraph(nodes_to_keep)
+    if constrained and removed_mask.sum() > max_remove:
+        penalty_base = np.array([1e6, 1e6, 1e6])
+        dist = float((removed_mask.sum() - max_remove) ** 2)
+        return tuple(penalty_base + dist), {}
 
-    # --- EVALUATION ---
-    # 1. Flow Capacity
-    flow_dict = {}
+    csr_masked = _worker_csr.copy()
+    csr_masked[removed_csr_idx, :] = 0
+    csr_masked[:, removed_csr_idx] = 0
+    csr_masked.eliminate_zeros()
+
+    # Max flow
     try:
-        flow_value, flow_dict = nx.maximum_flow(
-            G_sub, ssource, ssink, capacity="capacity"
-        )
+        result = maximum_flow(csr_masked, _worker_source_idx, _worker_sink_idx)
+        flow_value = result.flow_value / scale
     except Exception:
         flow_value = 0
 
-    # 2. SCC Co-occurrence
-    sccs = find_scc(G_sub)
-    redundancy = scc_redundancy(sccs=sccs)
+    # SCC redundancy (reuse same masked matrix — same trick as before)
+    n_components, labels = connected_components(
+        csr_masked, directed=True, connection="strong"
+    )
+    counts = np.bincount(labels)
+    redundancy = int(np.sum(counts[counts > 1] ** 2))
 
-    # 3. Cost (Number of nodes removed)
-    cost = len(removed_nodes_names)
+    cost = int(removed_mask.sum())
 
-    return (flow_value, cost, redundancy), flow_dict
-
-
-# --- Constraint Helpers ---
-
-
-def check_feasible(individual, max_remove):
-    """Returns True if the individual removes no more than max_remove nodes."""
-    return individual.count(0) <= max_remove
-
-
-def penalty_distance(individual, max_remove):
-    """Calculates how far the individual is from being feasible."""
-    return float((individual.count(0) - max_remove) ** 2)
-
-
-def constrained_evaluate(individual, G, removable_nodes, ssource, ssink, max_remove):
-    """
-    A manual wrapper that mimics DeltaPenalty but is picklable.
-    """
-    if not check_feasible(individual, max_remove):
-        # Penalty values (must be a tuple for multi-objective)
-        penalty_base = (1e6, 1e6, 1e6)
-        dist = penalty_distance(individual, max_remove)
-        return tuple(p + dist for p in penalty_base), {}
-
-    # Otherwise, return actual fitness
-    return evaluate(individual, G, removable_nodes, ssource, ssink)
-
-
-def _init_worker(G):
-    global _worker_G
-    _worker_G = G
-
-
-# --- Genotypic diversity ----
-
-
-def evaluate_global(
-    individual, removable_nodes, ssource, ssink, max_remove=None, constrained=False
-):
-    if constrained:
-        return constrained_evaluate(
-            individual=individual,
-            G=_worker_G,
-            removable_nodes=removable_nodes,
-            ssource=ssource,
-            ssink=ssink,
-            max_remove=max_remove,
-        )
-    else:
-        return evaluate(
-            individual=individual,
-            G=_worker_G,
-            removable_nodes=removable_nodes,
-            ssource=ssource,
-            ssink=ssink,
-        )
+    return (float(flow_value), cost, redundancy), {}
 
 
 def genotypic_diversity(population):
@@ -586,13 +536,48 @@ class GAOptimizer:
         self.removable_nodes = list(set(self.SG.nodes) - set(sources) - set(sinks))
         self.N = len(self.removable_nodes)
 
+        # Build CSR one for all optimization
+        self.node_order = list(self.SG.nodes)  # fixed order, defines CSR index space
+        self.node_to_idx = {node: i for i, node in enumerate(self.node_order)}
+
+        self.source_idx = self.node_to_idx["SuperSource"]
+        self.sink_idx = self.node_to_idx["SuperSink"]
+
+        # Precompute gene-index -> CSR-index mapping (removable_nodes order == gene order)
+        self.removable_csr_indices = np.array(
+            [self.node_to_idx[n] for n in self.removable_nodes], dtype=np.int64
+        )
+
+        SCALE = 1000
+        # Pre-scale capacity weights on the graph before conversion
+        G_scaled = self.SG.copy()
+        for u, v, d in G_scaled.edges(data=True):
+            d["capacity"] = int(round(d.get("capacity", 1.0) * SCALE))
+
+        self.csr = nx.to_scipy_sparse_array(
+            G_scaled,
+            nodelist=self.node_order,
+            weight="capacity",
+            format="csr",
+            dtype=np.int64,
+        )
+        self.scale = SCALE
+
+        # Set worker globals for baseline computation
+        import sys as _sys
+
+        _self_mod = _sys.modules[__name__]
+        _self_mod._worker_csr = self.csr
+        _self_mod._worker_removable_csr_indices = self.removable_csr_indices
+        _self_mod._worker_source_idx = self.source_idx
+        _self_mod._worker_sink_idx = self.sink_idx
+
         # Calculate Baselines for Normalization
         (self.base_flow, _, self.base_redundancy), _ = evaluate(
-            [1] * self.N,  # Individual where all nodes are kept (all 1s)
-            self.G,
-            self.removable_nodes,
-            "SuperSource",
-            "SuperSink",
+            individual=[1] * self.N,
+            scale=self.scale,
+            max_remove=self.max_remove,
+            constrained=False,
         )
 
         # Handle cases where base values might be 0 to avoid DivisionByZero
@@ -737,10 +722,8 @@ class GAOptimizer:
 
         # Create evaluation function without shared_cache
         eval_func = functools.partial(
-            evaluate_global,
-            removable_nodes=self.removable_nodes,
-            ssource="SuperSource",
-            ssink="SuperSink",
+            evaluate,
+            scale=self.scale,
             max_remove=self.max_remove,
             constrained=self.delta_penalty,
         )
@@ -749,7 +732,12 @@ class GAOptimizer:
             pool = multiprocessing.Pool(
                 processes=self._get_n_jobs(),
                 initializer=_init_worker,
-                initargs=(self.SG,),
+                initargs=(
+                    self.csr,
+                    self.removable_csr_indices,
+                    self.source_idx,
+                    self.sink_idx,
+                ),
                 maxtasksperchild=200,
             )
             cache_aware_map = SmartCacheMap(
