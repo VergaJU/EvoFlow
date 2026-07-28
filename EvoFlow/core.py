@@ -2,6 +2,7 @@ import random
 import time
 import networkx as nx
 import multiprocessing
+from array import array
 from deap import base, creator, tools
 from deap.benchmarks.tools import hypervolume
 import numpy as np
@@ -11,7 +12,6 @@ from EvoFlow.features_extraction import NetworkFeatures
 from EvoFlow.model import GAM
 import math
 import functools
-
 
 _worker_G = None
 # --- Helper Functions (Graph Algorithms) ---
@@ -74,14 +74,12 @@ def generate_individual(icls, removable_nodes, max_remove=3):
     1 = Keep Node, 0 = Remove Node.
     """
     ind = [1] * len(removable_nodes)
-    n_remove = random.randint(1, max_remove)
-    # Ensure we don't try to remove more than exist
-    n_remove = min(n_remove, len(removable_nodes))
+    n_remove = min(random.randint(1, max_remove), len(removable_nodes))
 
     to_remove = random.sample(range(len(removable_nodes)), n_remove)
     for i in to_remove:
         ind[i] = 0
-    return icls(ind)
+    return icls(array("B", ind))
 
 
 def repair_individual(ind, min_remove=2, max_remove=10):
@@ -538,7 +536,9 @@ class GAOptimizer:
         if not hasattr(creator, "FitnessMin"):
             creator.create("FitnessMin", base.Fitness, weights=(-1.0, -1.0, -1.0))
         if not hasattr(creator, "Individual"):
-            creator.create("Individual", list, fitness=creator.FitnessMin)
+            creator.create(
+                "Individual", array, typecode="B", fitness=creator.FitnessMin
+            )
 
         self.toolbox = base.Toolbox()
 
