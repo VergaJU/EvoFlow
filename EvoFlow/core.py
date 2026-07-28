@@ -13,6 +13,7 @@ from EvoFlow.model import GAM
 import math
 import functools
 import os
+import sys
 import json
 from scipy.sparse.csgraph import maximum_flow, connected_components
 
@@ -552,7 +553,8 @@ class GAOptimizer:
         # Pre-scale capacity weights on the graph before conversion
         G_scaled = self.SG.copy()
         for u, v, d in G_scaled.edges(data=True):
-            d["capacity"] = int(round(d.get("capacity", 1.0) * SCALE))
+            val = d.get("capacity", 1.0)
+            d["capacity"] = sys.maxsize if math.isinf(val) else int(round(val * SCALE))
 
         self.csr = nx.to_scipy_sparse_array(
             G_scaled,
