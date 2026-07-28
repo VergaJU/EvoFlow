@@ -1,10 +1,15 @@
+import json
+
+import numpy as np
+from deap import base, creator
+
+from EvoFlow import core
 from EvoFlow.core import (
     AdaptiveRates,
     constrained_evaluate,
     select_for_diversification,
     GAOptimizer,
 )
-from deap import base, creator
 
 # Ensure creator is setup
 if not hasattr(creator, "FitnessMin"):
@@ -175,3 +180,148 @@ def test_ga_delta_penalty(simple_graph):
     )
 
     assert len(logs) == 2
+
+
+# --- DiskLogger tests ---
+
+
+def test_disk_logger_basic(tmp_path):
+    log_file = tmp_path / "test.jsonl"
+    logger = core.DiskLogger(str(log_file), flush_every=10)
+    logger.log_generation(0, {"Flow": 1.0, "Cost": 2})
+    logger.log_generation(1, {"Flow": 0.5, "Cost": 1})
+    logger.close()
+
+    lines = log_file.read_text().strip().split("\n")
+    assert len(lines) == 2
+    rec0 = json.loads(lines[0])
+    assert rec0["gen"] == 0
+    assert rec0["Flow"] == 1.0
+    assert rec0["Cost"] == 2
+
+
+def test_disk_logger_visited_nodes_diff(tmp_path):
+    log_file = tmp_path / "test.jsonl"
+    logger = core.DiskLogger(str(log_file), flush_every=10)
+    logger.log_generation(0, {"visited_nodes": ["A", "B", "C"]})
+    logger.log_generation(1, {"visited_nodes": ["A", "B", "C", "D"]})
+    logger.log_generation(2, {"visited_nodes": ["A", "B", "C", "D", "E"]})
+    logger.close()
+
+    lines = log_file.read_text().strip().split("\n")
+    rec0 = json.loads(lines[0])
+    rec1 = json.loads(lines[1])
+    rec2 = json.loads(lines[2])
+
+    assert rec0["visited_nodes"] == ["A", "B", "C"]
+    assert rec1["visited_nodes"] == ["D"]
+    assert rec2["visited_nodes"] == ["E"]
+
+
+def test_disk_logger_visited_nodes_repeat(tmp_path):
+    log_file = tmp_path / "test.jsonl"
+    logger = core.DiskLogger(str(log_file), flush_every=10)
+    logger.log_generation(0, {"visited_nodes": ["A", "B"]})
+    logger.log_generation(1, {"visited_nodes": ["A", "B"]})
+    logger.close()
+
+    lines = log_file.read_text().strip().split("\n")
+    rec0 = json.loads(lines[0])
+    rec1 = json.loads(lines[1])
+    assert rec0["visited_nodes"] == ["A", "B"]
+    assert rec1["visited_nodes"] == []  # no new nodes
+
+
+def test_disk_logger_to_native():
+    obj = {
+        "a": np.float64(1.5),
+        "b": np.int32(3),
+        "c": [np.float32(0.5), np.float64(2.0)],
+        "d": np.array([1, 2, 3]),
+    }
+    native = core.DiskLogger._to_native(obj)
+    assert native["a"] == 1.5
+    assert isinstance(native["a"], float)
+    assert native["b"] == 3
+    assert isinstance(native["b"], int)
+    assert native["c"] == [0.5, 2.0]
+    assert native["d"] == [1, 2, 3]
+
+
+def test_disk_logger_flush_behavior(tmp_path):
+    log_file = tmp_path / "test.jsonl"
+    logger = core.DiskLogger(str(log_file), flush_every=2)
+    logger.log_generation(0, {"val": 1})
+    logger.log_generation(1, {"val": 2})
+    logger.log_generation(2, {"val": 3})
+    logger.close()
+
+    lines = log_file.read_text().strip().split("\n")
+    assert len(lines) == 3
+
+
+def test_load_logs(tmp_path):
+    log_file = tmp_path / "test.jsonl"
+    with open(log_file, "w") as f:
+        f.write(json.dumps({"gen": 0, "Flow": 1.0, "visited_nodes": ["A", "B"]}) + "\n")
+        f.write(json.dumps({"gen": 1, "Flow": 0.5, "visited_nodes": ["C"]}) + "\n")
+
+    logs = core.load_logs(str(log_file))
+    assert 0 in logs
+    assert 1 in logs
+    assert logs[0]["Flow"] == 1.0
+    assert logs[0]["visited_nodes"] == ["A", "B"]
+    assert logs[1]["visited_nodes"] == ["A", "B", "C"]
+
+
+def test_load_logs_no_visited(tmp_path):
+    log_file = tmp_path / "test.jsonl"
+    with open(log_file, "w") as f:
+        f.write(json.dumps({"gen": 0, "Flow": 1.0}) + "\n")
+
+    logs = core.load_logs(str(log_file))
+    assert "visited_nodes" not in logs[0]
+
+
+def test_adaptive_rates_reheat_multiple_times():
+    rates = AdaptiveRates(
+        base_cxpb=0.9,
+        base_mtpb=0.3,
+        base_indpb=0.1,
+        min_cxpb=0.5,
+        min_mtpb=0.1,
+        min_indpb=0.05,
+        stagnation_trigger=3,
+        decay=0.5,
+        reheat_attenuation=0.5,
+    )
+    rates.cxpb = 0.5
+    rates.mtpb = 0.1
+    rates.indpb = 0.05
+
+    rates.step(generations_without_improvement=3)
+    first_peak = rates.cxpb
+
+    rates.cxpb = 0.5
+    rates.mtpb = 0.1
+    rates.indpb = 0.05
+    rates.step(generations_without_improvement=3)
+    second_peak = rates.cxpb
+
+    assert first_peak > 0.5
+    assert second_peak > 0.5
+    assert second_peak < first_peak
+
+
+def test_adaptive_rates_no_stagnation_decay():
+    rates = AdaptiveRates(
+        base_cxpb=0.9,
+        base_mtpb=0.3,
+        base_indpb=0.1,
+        decay=0.5,
+        stagnation_trigger=10,
+    )
+    initial_cx = rates.cxpb
+    rates.step(generations_without_improvement=0)
+    assert rates.cxpb < initial_cx
+    assert rates.burst_active is False
