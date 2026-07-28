@@ -661,6 +661,7 @@ class GAOptimizer:
                 processes=self._get_n_jobs(),
                 initializer=__init_worker,
                 initargs=(self.SG,),
+                maxtasksperchild=200,
             )
             cache_aware_map = SmartCacheMap(
                 evaluation_func=eval_func, cache=local_cache, pool=pool
