@@ -91,7 +91,7 @@ run_evoflow(
     population_size=500,
     # Optional arguments
     early_stop=100,
-    repair=True
+    repair=True,
 )
 ```
 
