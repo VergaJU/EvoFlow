@@ -13,7 +13,6 @@ from EvoFlow.model import GAM
 import math
 import functools
 import os
-import sys
 import json
 from scipy.sparse.csgraph import maximum_flow, connected_components
 
@@ -263,6 +262,51 @@ def select_for_diversification(population, n):
     return sorted_front[:n]  # Return the most crowded ones to mutate
 
 
+# Save scaling for the edge capacities to work with int32:
+
+
+def build_scaled_capacities(G, scale):
+    """
+    Returns (G_scaled, scale, sentinel_int) with capacities converted to
+    safe int32-range integers. np.inf edges get an explicit finite
+    sentinel, never a raw cast of infinity.
+    """
+    finite_caps = [
+        d.get("capacity", 1.0)
+        for _, _, d in G.edges(data=True)
+        if np.isfinite(d.get("capacity", 1.0))
+    ]
+    max_finite = max(finite_caps)
+
+    INT32_MAX = np.iinfo(np.int32).max
+
+    # Safety check: does this scale keep the real (finite) capacities
+    # comfortably inside int32 once scaled?
+    max_scaled_finite = max_finite * scale
+    if max_scaled_finite > INT32_MAX / 10:
+        raise ValueError(
+            f"scale={scale} pushes max finite capacity ({max_finite}) to "
+            f"{max_scaled_finite}, too close to int32 limit ({INT32_MAX}). "
+            f"Reduce scale."
+        )
+
+    # Sentinel: deliberately "big enough to never bottleneck", NOT a cast of inf.
+    # 10x the largest real scaled capacity is comfortably non-bottlenecking
+    # for any plausible network, while staying well under int32 max.
+    sentinel = int(max_scaled_finite * 10)
+    assert sentinel < INT32_MAX, "sentinel itself overflows int32 -- lower scale"
+
+    G_scaled = G.copy()
+    for u, v, d in G_scaled.edges(data=True):
+        cap = d.get("capacity", 1.0)
+        if not np.isfinite(cap):
+            d["capacity"] = sentinel
+        else:
+            d["capacity"] = int(round(cap * scale))
+
+    return G_scaled, sentinel
+
+
 # --- class for loging on disk ---
 
 
@@ -509,6 +553,7 @@ class GAOptimizer:
         use_multiprocessing=True,
         verbose=False,
         n_jobs=None,
+        scale=1000,
         **kwargs,
     ):
         self.G = G
@@ -549,21 +594,19 @@ class GAOptimizer:
             [self.node_to_idx[n] for n in self.removable_nodes], dtype=np.int64
         )
 
-        SCALE = 1000
+        self.scale = scale
         # Pre-scale capacity weights on the graph before conversion
-        G_scaled = self.SG.copy()
-        for u, v, d in G_scaled.edges(data=True):
-            val = d.get("capacity", 1.0)
-            d["capacity"] = sys.maxsize if math.isinf(val) else int(round(val * SCALE))
+        self.G_scaled, self.sentinel = build_scaled_capacities(
+            G=self.SG, scale=self.scale
+        )
 
         self.csr = nx.to_scipy_sparse_array(
-            G_scaled,
+            self.G_scaled,
             nodelist=self.node_order,
             weight="capacity",
             format="csr",
-            dtype=np.int64,
+            dtype=np.int32,
         )
-        self.scale = SCALE
 
         # Set worker globals for baseline computation
         import sys as _sys
