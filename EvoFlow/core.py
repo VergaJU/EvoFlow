@@ -18,13 +18,13 @@ from scipy.sparse.csgraph import maximum_flow, connected_components
 
 
 _worker_csr = None
-_worker_node_to_idx = None
+_worker_idx_to_node = None
 _worker_removable_csr_indices = None
 _worker_source_idx = None
 _worker_sink_idx = None
 
 
-def _init_worker(csr, removable_csr_indices, source_idx, sink_idx):
+def _init_worker(csr, removable_csr_indices, source_idx, sink_idx, node_to_idx):
     global \
         _worker_csr, \
         _worker_removable_csr_indices, \
@@ -34,23 +34,10 @@ def _init_worker(csr, removable_csr_indices, source_idx, sink_idx):
     _worker_removable_csr_indices = removable_csr_indices
     _worker_source_idx = source_idx
     _worker_sink_idx = sink_idx
+    _worker_idx_to_node = {v: k for k, v in node_to_idx.items()}
 
 
 # --- Helper Functions (Graph Algorithms) ---
-
-
-def calculate_flow_capacity(G, ssource, ssink):
-    """
-    Calculates max flow capacity between source and sink.
-    """
-    flow_dict = {}
-    try:
-        flow_value, flow_dict = nx.maximum_flow(G, ssource, ssink, capacity="capacity")
-    except Exception as e:
-        # Fallback or error handling if graph structure is invalid
-        print(f"Error calculating flow: {e}")
-        flow_value = 0
-    return flow_value, flow_dict
 
 
 def extract_active_subgraph(G, source="SuperSource", sink="SuperSink"):
@@ -137,6 +124,63 @@ def get_nodes(removable_nodes, individual):
 # --- Evaluation Function (Must be top-level for multiprocessing) ---
 
 
+def mask_csr(individual):
+    removed_mask = ~np.array(individual, dtype=bool)
+    removed_csr_idx = _worker_removable_csr_indices[removed_mask]
+
+    csr_masked = _worker_csr.copy()
+    csr_masked[removed_csr_idx, :] = 0
+    csr_masked[:, removed_csr_idx] = 0
+    csr_masked.eliminate_zeros()
+    return csr_masked, removed_mask
+
+
+def scipy_to_flow_dict_active(flow_matrix):
+    """
+    Converts MaximumFlowResult.flow to a dictionary containing
+    only active (non-zero) flows.
+    """
+    num_nodes = flow_matrix.shape[0]
+
+    # Initialize dictionary for all node indices
+    flow_dict = {node_name: {} for node_name in _worker_idx_to_node.values()}
+
+    # Extract the internal CSR arrays
+    indptr = flow_matrix.indptr
+    indices = flow_matrix.indices
+    data = flow_matrix.data
+
+    for u in range(num_nodes):
+        for idx in range(indptr[u], indptr[u + 1]):
+            v = indices[idx]
+            flow_val = data[idx]
+            flow_dict[_worker_idx_to_node[u]][_worker_idx_to_node[v]] = flow_val
+
+    return flow_dict
+
+
+def calculate_flow_capacity(csr_masked):
+    """
+    Calculates max flow capacity between source and sink.
+    """
+    res = maximum_flow(csr_masked, _worker_source_idx, _worker_sink_idx)
+    flow_value = res.flow_value
+    flow_matrix = res.flow
+    flow_dict = scipy_to_flow_dict_active(flow_matrix)
+
+    return flow_value, flow_dict
+
+
+def scc_redundancy(csr_masked):
+    # SCC redundancy (reuse same masked matrix — same trick as before)
+    n_components, labels = connected_components(
+        csr_masked, directed=True, connection="strong"
+    )
+    counts = np.bincount(labels)
+    redundancy = int(np.sum(counts[counts > 1] ** 2))
+    return redundancy
+
+
 def evaluate(individual, scale, max_remove, constrained):
     """
     Fitness Function.
@@ -145,32 +189,19 @@ def evaluate(individual, scale, max_remove, constrained):
     2. Number of Removed Nodes
     3. Co-occurrence in SCCs
     """
-    removed_mask = ~np.array(individual, dtype=bool)
-    removed_csr_idx = _worker_removable_csr_indices[removed_mask]
+    csr_masked, removed_mask = mask_csr(individual)
 
     if constrained and removed_mask.sum() > max_remove:
         penalty_base = np.array([1e6, 1e6, 1e6])
         dist = float((removed_mask.sum() - max_remove) ** 2)
         return tuple(penalty_base + dist), {}
 
-    csr_masked = _worker_csr.copy()
-    csr_masked[removed_csr_idx, :] = 0
-    csr_masked[:, removed_csr_idx] = 0
-    csr_masked.eliminate_zeros()
-
     # Max flow
-    try:
-        result = maximum_flow(csr_masked, _worker_source_idx, _worker_sink_idx)
-        flow_value = result.flow_value / scale
-    except Exception:
-        flow_value = 0
 
-    # SCC redundancy (reuse same masked matrix — same trick as before)
-    n_components, labels = connected_components(
-        csr_masked, directed=True, connection="strong"
-    )
-    counts = np.bincount(labels)
-    redundancy = int(np.sum(counts[counts > 1] ** 2))
+    flow_value, flow_dict = calculate_flow_capacity(csr_masked)
+    flow_value = flow_value / scale
+
+    redundancy = scc_redundancy(csr_masked)
 
     cost = int(removed_mask.sum())
 
@@ -616,7 +647,7 @@ class GAOptimizer:
         _self_mod._worker_removable_csr_indices = self.removable_csr_indices
         _self_mod._worker_source_idx = self.source_idx
         _self_mod._worker_sink_idx = self.sink_idx
-
+        _self_mod._worker_idx_to_node = {v: k for k, v in self.node_to_idx.items()}
         # Calculate Baselines for Normalization
         (self.base_flow, _, self.base_redundancy), _ = evaluate(
             individual=[1] * self.N,
@@ -782,6 +813,7 @@ class GAOptimizer:
                     self.removable_csr_indices,
                     self.source_idx,
                     self.sink_idx,
+                    self.node_to_idx,
                 ),
                 maxtasksperchild=200,
             )
