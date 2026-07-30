@@ -37,14 +37,16 @@ def _build_csr_from_graph(G):
         removable_nodes,
         node_to_idx["SuperSource"],
         node_to_idx["SuperSink"],
+        node_to_idx,
     )
 
 
-def _set_worker_globals(csr, removable_csr_indices, source_idx, sink_idx):
+def _set_worker_globals(csr, removable_csr_indices, source_idx, sink_idx, node_to_idx):
     core._worker_csr = csr
     core._worker_removable_csr_indices = removable_csr_indices
     core._worker_source_idx = source_idx
     core._worker_sink_idx = sink_idx
+    core._worker_idx_to_node = {v: k for k, v in node_to_idx.items()}
 
 
 # Ensure creator is setup if running tests in isolation
@@ -110,8 +112,8 @@ def _simple_csr_graph():
 
 
 def test_evaluate_keep_all():
-    csr, ridx, removable, src_idx, sink_idx = _simple_csr_graph()
-    _set_worker_globals(csr, ridx, src_idx, sink_idx)
+    csr, ridx, removable, src_idx, sink_idx, node_to_idx = _simple_csr_graph()
+    _set_worker_globals(csr, ridx, src_idx, sink_idx, node_to_idx)
 
     ind = [1, 1]  # keep both A and B
     (flow, cost, red), _ = evaluate(ind, scale=SCALE, max_remove=10, constrained=False)
@@ -121,8 +123,8 @@ def test_evaluate_keep_all():
 
 
 def test_evaluate_remove_node():
-    csr, ridx, removable, src_idx, sink_idx = _simple_csr_graph()
-    _set_worker_globals(csr, ridx, src_idx, sink_idx)
+    csr, ridx, removable, src_idx, sink_idx, node_to_idx = _simple_csr_graph()
+    _set_worker_globals(csr, ridx, src_idx, sink_idx, node_to_idx)
 
     ind = [0, 1]  # remove A
     (flow, cost, red), _ = evaluate(ind, scale=SCALE, max_remove=10, constrained=False)
@@ -131,8 +133,8 @@ def test_evaluate_remove_node():
 
 
 def test_evaluate_constrained_penalty():
-    csr, ridx, removable, src_idx, sink_idx = _simple_csr_graph()
-    _set_worker_globals(csr, ridx, src_idx, sink_idx)
+    csr, ridx, removable, src_idx, sink_idx, node_to_idx = _simple_csr_graph()
+    _set_worker_globals(csr, ridx, src_idx, sink_idx, node_to_idx)
 
     ind = [0, 0]  # remove A and B (2 removals, max=1)
     (f0, f1, f2), _ = evaluate(ind, scale=SCALE, max_remove=1, constrained=True)
@@ -140,8 +142,8 @@ def test_evaluate_constrained_penalty():
 
 
 def test_evaluate_constrained_feasible():
-    csr, ridx, removable, src_idx, sink_idx = _simple_csr_graph()
-    _set_worker_globals(csr, ridx, src_idx, sink_idx)
+    csr, ridx, removable, src_idx, sink_idx, node_to_idx = _simple_csr_graph()
+    _set_worker_globals(csr, ridx, src_idx, sink_idx, node_to_idx)
 
     ind = [0, 1]  # remove A only (1 removal, max=1)
     (flow, cost, red), _ = evaluate(ind, scale=SCALE, max_remove=1, constrained=True)
@@ -162,8 +164,8 @@ def test_evaluate_scc_redundancy():
     G.add_edge("B", "C", capacity=10.0)
     G.add_edge("C", "A", capacity=10.0)  # cycle A->B->C->A
     G.add_edge("A", "SuperSink", capacity=10.0)
-    csr, ridx, removable, src_idx, sink_idx = _build_csr_from_graph(G)
-    _set_worker_globals(csr, ridx, src_idx, sink_idx)
+    csr, ridx, removable, src_idx, sink_idx, node_to_idx = _build_csr_from_graph(G)
+    _set_worker_globals(csr, ridx, src_idx, sink_idx, node_to_idx)
 
     # 3 removable nodes: A, B, C
     ind = [1, 1, 1]  # keep all
@@ -226,12 +228,15 @@ def test_mutate_low_prob():
 
 
 def test__init_worker(simple_graph):
-    csr, ridx, removable, src_idx, sink_idx = _build_csr_from_graph(simple_graph)
-    core._init_worker(csr, ridx, src_idx, sink_idx)
+    csr, ridx, removable, src_idx, sink_idx, node_to_idx = _build_csr_from_graph(
+        simple_graph
+    )
+    core._init_worker(csr, ridx, src_idx, sink_idx, node_to_idx)
     assert core._worker_csr is csr
     assert np.array_equal(core._worker_removable_csr_indices, ridx)
     assert core._worker_source_idx == src_idx
     assert core._worker_sink_idx == sink_idx
+    assert core._worker_idx_to_node == {v: k for k, v in node_to_idx.items()}
 
 
 def test_genotypic_diversity():

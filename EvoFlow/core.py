@@ -29,7 +29,8 @@ def _init_worker(csr, removable_csr_indices, source_idx, sink_idx, node_to_idx):
         _worker_csr, \
         _worker_removable_csr_indices, \
         _worker_source_idx, \
-        _worker_sink_idx
+        _worker_sink_idx, \
+        _worker_idx_to_node
     _worker_csr = csr
     _worker_removable_csr_indices = removable_csr_indices
     _worker_source_idx = source_idx
@@ -135,38 +136,54 @@ def mask_csr(individual):
     return csr_masked, removed_mask
 
 
-def scipy_to_flow_dict_active(flow_matrix):
+def scipy_to_flow_dict_active(flow_matrix, csr_masked):
     """
-    Converts MaximumFlowResult.flow to a dictionary containing
-    only active (non-zero) flows.
-    """
-    num_nodes = flow_matrix.shape[0]
+    Converts MaximumFlowResult.flow to a dict of only REAL, active
+    (positive) flows on edges that exist in the original capacity
+    matrix -- matching nx.maximum_flow's semantics.
 
-    # Initialize dictionary for all node indices
+    flow_matrix includes scipy's internally-added reverse/residual
+    edges (with zero or negative bookkeeping values); these must be
+    filtered out using the original capacity structure, not inferred
+    from flow_matrix's own sparsity pattern.
+    """
+    # Binary mask of the ORIGINAL (real) edges only
+    real_edge_mask = csr_masked.copy()
+    real_edge_mask.data[:] = 1
+
+    # Keep flow_matrix values only where a real edge exists.
+    # .multiply() takes the intersection of sparsity patterns.
+    filtered = flow_matrix.multiply(real_edge_mask).tocsr()
+
+    # Residual bookkeeping can leave negative values even on real
+    # bidirectional edge pairs (net-direction cancellation) -- clip
+    # to match nx's convention of nonnegative per-edge flow.
+    filtered.data = np.clip(filtered.data, 0, None)
+    filtered.eliminate_zeros()
+
+    num_nodes = filtered.shape[0]
     flow_dict = {node_name: {} for node_name in _worker_idx_to_node.values()}
 
-    # Extract the internal CSR arrays
-    indptr = flow_matrix.indptr
-    indices = flow_matrix.indices
-    data = flow_matrix.data
+    indptr = filtered.indptr
+    indices = filtered.indices
+    data = filtered.data
 
     for u in range(num_nodes):
         for idx in range(indptr[u], indptr[u + 1]):
             v = indices[idx]
-            flow_val = data[idx]
-            flow_dict[_worker_idx_to_node[u]][_worker_idx_to_node[v]] = flow_val
+            flow_dict[_worker_idx_to_node[u]][_worker_idx_to_node[v]] = data[idx]
 
     return flow_dict
 
 
-def calculate_flow_capacity(csr_masked):
+def calculate_flow_capacity(csr_masked, scale):
     """
     Calculates max flow capacity between source and sink.
     """
     res = maximum_flow(csr_masked, _worker_source_idx, _worker_sink_idx)
-    flow_value = res.flow_value
-    flow_matrix = res.flow
-    flow_dict = scipy_to_flow_dict_active(flow_matrix)
+    flow_value = res.flow_value / scale
+    flow_matrix = res.flow / scale
+    flow_dict = scipy_to_flow_dict_active(flow_matrix, csr_masked)
 
     return flow_value, flow_dict
 
@@ -198,8 +215,7 @@ def evaluate(individual, scale, max_remove, constrained):
 
     # Max flow
 
-    flow_value, flow_dict = calculate_flow_capacity(csr_masked)
-    flow_value = flow_value / scale
+    flow_value, _ = calculate_flow_capacity(csr_masked, scale)
 
     redundancy = scc_redundancy(csr_masked)
 
