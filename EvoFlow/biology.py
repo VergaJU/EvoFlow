@@ -13,7 +13,9 @@ class BioNetworkPreparer:
     based on gene expression data.
     """
 
-    def __init__(self):
+    def __init__(self, lock_targets: int = 0):
+        if lock_targets not in (0, 1, 2, 3):
+            raise ValueError(f"lock_targets must be 0, 1, 2, or 3, got {lock_targets}")
         self.G = None
         self.annotation = None
         self.expression = None
@@ -27,6 +29,7 @@ class BioNetworkPreparer:
         self.annotation_index_col = "gene"
         # Node type for target identification in graph-based pathway
         self.target_node_type = "transcription_factor"
+        self.lock_targets = lock_targets
 
     def load_data(
         self,
@@ -332,7 +335,9 @@ class BioNetworkPreparer:
             source_nodes = list(connected_receptors)
 
         # Call general function
-        return prepare_flow_topology(self.G, source_nodes, sink_nodes)
+        return prepare_flow_topology(
+            self.G, source_nodes, sink_nodes, self.lock_targets
+        )
 
     def get_graph(self):
         return self.G
@@ -349,6 +354,7 @@ class BioNetworkPreparer:
         regulons_path: str = None,
         targets: list = None,
         receptors: list = None,
+        lock_targets: int = 0,
         **kwargs,
     ) -> tuple:
         """
@@ -366,6 +372,11 @@ class BioNetworkPreparer:
             regulons_path (str, optional): Path to regulons file for target identification.
             targets (list, optional): List of target genes (used if regulons_path is None).
             receptors (list, optional): List of receptor gene names to use as source nodes directly.
+            lock_targets (int): Bitmask controlling which original nodes are locked into sources/sinks.
+                0 (default): No locking.
+                1: Original source nodes are locked into final_sources.
+                2: Original sink nodes are locked into final_sinks.
+                3: Both source and sink nodes are locked.
             **kwargs: Additional parameters for column name customization:
                 - annotation_index_col: Custom annotation index column name (default: "gene")
                 - network_start_col: Custom network start column name (default: "start")
@@ -429,6 +440,7 @@ class BioNetworkPreparer:
             target_genes = targets
 
         # Prepare topology and get sources/sinks
+        self.lock_targets = lock_targets
         sources, sinks = self.prepare_bioflow_topology(
             ligands=ligands, target_genes=target_genes, receptors=receptors
         )

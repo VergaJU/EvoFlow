@@ -1,5 +1,6 @@
 import pandas as pd
 import networkx as nx
+import pytest
 from unittest.mock import patch
 from EvoFlow.biology import BioNetworkPreparer
 
@@ -9,6 +10,13 @@ def test_initialization():
     assert prep.G is None
     assert prep.annotation is None
     assert prep.expression is None
+    assert prep.lock_targets == 0
+
+    prep2 = BioNetworkPreparer(lock_targets=3)
+    assert prep2.lock_targets == 3
+
+    with pytest.raises(ValueError):
+        BioNetworkPreparer(lock_targets=5)
 
 
 def test_load_data(mock_net_df, mock_annotation, mock_anndata):
@@ -199,3 +207,166 @@ def test_prepare_flow_topology():
     # Check sources and sinks lists
     assert sources == ["SuperSource", "dummy_A"]
     assert sinks == ["dummy_D", "SuperSink"]
+
+
+def test_prepare_flow_topology_lock_0():
+    from EvoFlow.preparer import prepare_flow_topology
+
+    G = nx.DiGraph()
+    G.add_nodes_from(["A", "B", "C", "D"])
+    G.add_edges_from(
+        [
+            ("A", "B", {"capacity": 1.0}),
+            ("B", "C", {"capacity": 2.0}),
+            ("C", "D", {"capacity": 1.5}),
+        ]
+    )
+
+    source_nodes = ["A"]
+    sink_nodes = ["D"]
+
+    sources, sinks = prepare_flow_topology(G, source_nodes, sink_nodes, lock_targets=0)
+
+    assert "SuperSource" in sources
+    assert "dummy_A" in sources
+    assert "A" not in sources
+    assert "D" not in sinks
+    assert "dummy_D" in sinks
+    assert "SuperSink" in sinks
+
+
+def test_prepare_flow_topology_lock_1():
+    from EvoFlow.preparer import prepare_flow_topology
+
+    G = nx.DiGraph()
+    G.add_nodes_from(["A", "B", "C", "D"])
+    G.add_edges_from(
+        [
+            ("A", "B", {"capacity": 1.0}),
+            ("B", "C", {"capacity": 2.0}),
+            ("C", "D", {"capacity": 1.5}),
+        ]
+    )
+
+    source_nodes = ["A"]
+    sink_nodes = ["D"]
+
+    sources, sinks = prepare_flow_topology(G, source_nodes, sink_nodes, lock_targets=1)
+
+    assert "SuperSource" in sources
+    assert "dummy_A" in sources
+    assert "A" in sources
+    assert "D" not in sinks
+    assert "dummy_D" in sinks
+    assert "SuperSink" in sinks
+
+
+def test_prepare_flow_topology_lock_2():
+    from EvoFlow.preparer import prepare_flow_topology
+
+    G = nx.DiGraph()
+    G.add_nodes_from(["A", "B", "C", "D"])
+    G.add_edges_from(
+        [
+            ("A", "B", {"capacity": 1.0}),
+            ("B", "C", {"capacity": 2.0}),
+            ("C", "D", {"capacity": 1.5}),
+        ]
+    )
+
+    source_nodes = ["A"]
+    sink_nodes = ["D"]
+
+    sources, sinks = prepare_flow_topology(G, source_nodes, sink_nodes, lock_targets=2)
+
+    assert "SuperSource" in sources
+    assert "dummy_A" in sources
+    assert "A" not in sources
+    assert "D" in sinks
+    assert "dummy_D" in sinks
+    assert "SuperSink" in sinks
+
+
+def test_prepare_flow_topology_lock_3():
+    from EvoFlow.preparer import prepare_flow_topology
+
+    G = nx.DiGraph()
+    G.add_nodes_from(["A", "B", "C", "D"])
+    G.add_edges_from(
+        [
+            ("A", "B", {"capacity": 1.0}),
+            ("B", "C", {"capacity": 2.0}),
+            ("C", "D", {"capacity": 1.5}),
+        ]
+    )
+
+    source_nodes = ["A"]
+    sink_nodes = ["D"]
+
+    sources, sinks = prepare_flow_topology(G, source_nodes, sink_nodes, lock_targets=3)
+
+    assert "SuperSource" in sources
+    assert "dummy_A" in sources
+    assert "A" in sources
+    assert "D" in sinks
+    assert "dummy_D" in sinks
+    assert "SuperSink" in sinks
+
+
+def test_prepare_flow_topology_lock_invalid():
+    from EvoFlow.preparer import prepare_flow_topology
+
+    G = nx.DiGraph()
+    G.add_nodes_from(["A", "B"])
+    G.add_edge("A", "B", capacity=1.0)
+
+    with pytest.raises(ValueError, match="lock_targets must be 0, 1, 2, or 3"):
+        prepare_flow_topology(G, ["A"], ["B"], lock_targets=4)
+
+    with pytest.raises(ValueError, match="lock_targets must be 0, 1, 2, or 3"):
+        prepare_flow_topology(G, ["A"], ["B"], lock_targets=-1)
+
+
+def test_prepare_bioflow_topology_lock_targets_propagation():
+    prep = BioNetworkPreparer(lock_targets=1)
+    G = nx.DiGraph()
+    # A(Ligand) -> B(Receptor) -> C -> D(Target)
+    G.add_nodes_from(
+        [
+            ("A", {"node_type": "ligand"}),
+            ("B", {"node_type": "receptor"}),
+            ("C", {"node_type": "mediator"}),
+            ("D", {"node_type": "target"}),
+        ]
+    )
+    G.add_edges_from([("A", "B"), ("B", "C"), ("C", "D")])
+    prep.G = G
+
+    sources, sinks = prep.prepare_bioflow_topology(ligands=["A"], target_genes=["D"])
+
+    # lock_targets=1: original source_nodes (B, the receptor derived from A) should be in sources
+    assert "B" in sources
+    # lock_targets=1: original sink_nodes (D) should NOT be in sinks
+    assert "D" not in sinks
+
+
+def test_prepare_bioflow_topology_lock_targets_full():
+    prep = BioNetworkPreparer(lock_targets=3)
+    G = nx.DiGraph()
+    # A(Ligand) -> B(Receptor) -> C -> D(Target)
+    G.add_nodes_from(
+        [
+            ("A", {"node_type": "ligand"}),
+            ("B", {"node_type": "receptor"}),
+            ("C", {"node_type": "mediator"}),
+            ("D", {"node_type": "target"}),
+        ]
+    )
+    G.add_edges_from([("A", "B"), ("B", "C"), ("C", "D")])
+    prep.G = G
+
+    sources, sinks = prep.prepare_bioflow_topology(ligands=["A"], target_genes=["D"])
+
+    # lock_targets=3: both original source_nodes (B) and sink_nodes (D) should be locked
+    assert "B" in sources
+    assert "D" in sinks

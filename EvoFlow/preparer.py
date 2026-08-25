@@ -1,7 +1,7 @@
 import numpy as np
 
 
-def prepare_flow_topology(G, source_nodes, sink_nodes):
+def prepare_flow_topology(G, source_nodes, sink_nodes, lock_targets: int = 0):
     """
     General function to prepare a graph for flow analysis by adding SuperSource, SuperSink, and dummy nodes.
 
@@ -9,11 +9,19 @@ def prepare_flow_topology(G, source_nodes, sink_nodes):
         G (nx.DiGraph): The graph to modify.
         source_nodes (list): List of node names to treat as sources (will connect to SuperSource via dummies).
         sink_nodes (list): List of node names to treat as sinks (will connect to SuperSink via dummies).
+        lock_targets (int): Bitmask controlling which original nodes are locked into sources/sinks.
+            0 (default): No locking — only SuperSource/dummy sources and dummy sinks/SuperSink are returned.
+            1: Original source_nodes are added to final_sources (cannot be removed by GA).
+            2: Original sink_nodes are added to final_sinks (cannot be removed by GA).
+            3: Both source_nodes and sink_nodes are locked.
 
     Returns:
         tuple: (final_sources, final_sinks) where final_sources includes SuperSource and dummy sources,
                and final_sinks includes dummy sinks and SuperSink.
     """
+    if lock_targets not in (0, 1, 2, 3):
+        raise ValueError(f"lock_targets must be 0, 1, 2, or 3, got {lock_targets}")
+
     # Compute mean capacity from existing edges
     capacities = [d.get("capacity", 0) for u, v, d in G.edges(data=True)]
     mean_capacity = np.mean(capacities) if capacities else 1.0
@@ -81,6 +89,10 @@ def prepare_flow_topology(G, source_nodes, sink_nodes):
 
     # Define final sources and sinks
     final_sources = ["SuperSource"] + [n[0] for n in dummy_source_nodes]
+    if lock_targets == 1 or lock_targets == 3:
+        final_sources.extend(source_nodes)
     final_sinks = [n[0] for n in dummy_sinks] + ["SuperSink"]
+    if lock_targets == 2 or lock_targets == 3:
+        final_sinks.extend(sink_nodes)
 
     return final_sources, final_sinks

@@ -26,6 +26,7 @@ def run_evoflow(
     celltype: str = None,
     regulons: str = None,
     targets: str = None,
+    lock_targets: int = 0,
     generations=10000,
     population_size=1000,
     return_results=False,
@@ -46,6 +47,11 @@ def run_evoflow(
         celltype (str, optional): Cell type to filter by.
         regulons (str, optional): Path to regulons file for target identification.
         targets (str, optional): Comma-delimited list of target genes (if regulons not used).
+        lock_targets (int): Bitmask controlling which original nodes are locked into sources/sinks.
+            0 (default): No locking.
+            1: Original source nodes are locked into final_sources.
+            2: Original sink nodes are locked into final_sinks.
+            3: Both source and sink nodes are locked.
         generations (int): Number of GA generations (default 10000).
         population_size (int): GA population size (default 1000).
         return_results (bool): If True, return results; if False, return filename_prefix.
@@ -94,6 +100,7 @@ def run_evoflow(
             celltype=celltype,
             regulons_path=regulons,
             targets=targets_list,
+            lock_targets=lock_targets,
         )
     except ValueError as e:
         print(f"Error during network preparation: {e}")
@@ -188,6 +195,13 @@ def main():
         default=None,
         help="Number of parallel jobs for multiprocessing (default: all CPUs)",
     )
+    parser.add_argument(
+        "--lock_targets",
+        type=int,
+        default=0,
+        choices=[0, 1, 2, 3],
+        help="Lock original source/sink nodes: 0=none, 1=sources, 2=sinks, 3=both (default: 0)",
+    )
 
     args = parser.parse_args()
 
@@ -202,6 +216,7 @@ def main():
         ligands_file=args.ligands,
         label=args.label,
         celltype=args.celltype,
+        lock_targets=args.lock_targets,
         generations=args.generations,
         pop_size=args.pop_size,
         n_jobs=args.n_jobs,
