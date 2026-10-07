@@ -189,6 +189,37 @@ class TestPrepareNetworkWorkflow:
                                     mock_id.assert_called_once()
                                     mock_topo.assert_called_once()
 
+    def test_prepare_network_warns_when_label_given_without_anndata(
+        self, mock_net_df, mock_annotation, capsys
+    ):
+        """label/celltype with non-AnnData expression is ignored with a notice"""
+        prep = BioNetworkPreparer()
+
+        with (
+            patch.object(prep, "load_data"),
+            patch.object(prep, "filter_expression_data") as mock_filter,
+            patch.object(prep, "compute_percolation"),
+            patch.object(prep, "build_base_network"),
+            patch.object(prep, "update_edge_capacities"),
+            patch.object(prep, "prepare_bioflow_topology") as mock_topo,
+        ):
+            # Bulk expression: DataFrame, not AnnData
+            prep.expression = pd.DataFrame()
+            mock_topo.return_value = (["B"], ["E"])
+
+            prep.prepare_network(
+                network_path="network.txt",
+                annotation_path="annotation.txt",
+                expression_path="expression.csv",
+                ligands=["A"],
+                targets=["D", "E"],
+                label="celltype",
+                celltype="Type A",
+            )
+
+            assert mock_filter.call_count == 0
+            assert "only applies to h5ad" in capsys.readouterr().out
+
     def test_prepare_network_backward_compatibility_individual_methods(
         self, mock_net_df, mock_annotation
     ):

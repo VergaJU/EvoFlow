@@ -9,7 +9,7 @@ By integrating gene expression data (from `scanpy` AnnData objects) with signali
 ## Features
 
 - **Biological Network Construction**: builds directed graphs from ligand-receptor interactions and signaling pathways.
-- **Data Integration**: Incorporates single-cell gene expression data (`.h5ad`) to weight network capacities.
+- **Data Integration**: Incorporates expression data — single-cell (`.h5ad`) or bulk (`.csv`/`.tsv`) — to weight network capacities, with configurable normalization (CPM, log1p, min-max) and per-gene statistics.
 - **Flow Analysis**: Computes Maximum Flow from ligands (sources) to target genes (sinks).
 - **Genetic Algorithm Optimization**: Uses `deap` to find the optimal set of nodes to "knock out" to minimize flow (or other objectives) while preserving specific network structures.
 - **GAM Parameter Estimation**: Uses a Generalized Additive Model (GAM) to automatically estimate optimal GA population size and early stopping patience from network features, removing the need for manual tuning.
@@ -53,22 +53,26 @@ python -m EvoFlow.cli \
 |----------|------|-------------|
 | Network | `-n`, `--network` | Path to the network file (TSV: source, target, weight, type) |
 | Annotation | `-a`, `--annotation` | Path to annotation file (TSV mapping genes to types) |
-| Expression | `-f`, `--file` | Path to `.h5ad` (Scanpy) file containing expression data |
+| Expression | `-f`, `--file` | Path to expression matrix: `.h5ad` (Scanpy) or `.csv`/`.tsv` (bulk) |
 | Regulons | `-r`, `--regulons` | Path to regulons CSV file |
 | Receptors | `-b`, `--receptors` | Pipe-separated list of receptor genes (e.g. "R1\|R2") |
 | Mediators | `-m`, `--mediators` | Comma-separated list of mediator genes |
 | Ligands | `-s`, `--ligands` | CSV file containing ligand genes (must have column 'x') |
-| Label | `-l`, `--label` | Column name in `adata.obs` for cell type grouping |
-| Cell Type | `-c`, `--celltype` | Specific cell type to analyze from the label column |
+| Label | `-l`, `--label` | Column name in `adata.obs` for cell type filtering (h5ad only; optional, requires `--celltype`) |
+| Cell Type | `-c`, `--celltype` | Specific cell type to analyze from the label column (h5ad only; optional, requires `--label`) |
+| Expression Stat | `--expression_stat` | Per-gene statistic used for percolation: `nonzero_ratio` (default), `mean`, `median`, `p90`, `max` |
+| Expression Norm | `--expression_norm` | Normalization applied before `--expression_stat` (ignored for `nonzero_ratio`): `none` (default), `cpm`, `log1p`, `minmax` |
+| Expression Transpose | `--expression_transpose` / `--no-expression_transpose` | Bulk `.csv`/`.tsv` files have genes as rows (gene IDs in the first column); transpose to samples × genes (default: False; not applicable to `.h5ad`) |
 | Generations | `--generations` | Number of GA generations (default: 10000) |
-| Population | `--pop_size` | Population size for GA (default: 1000) |
-| Early Stop | `--early_stop` | Generations without improvement before stopping (default: 100) |
-| Delta Penalty | `--delta_penalty` | Apply delta penalty (default: False) |
-| Repair | `--repair` | Repair invalid individuals (default: True) |
-| Norm Hypervolume | `--norm_hypervolume` | Normalize hypervolume calculation (default: False) |
-| Dynamic Rates | `--dynamic_rates` | Use dynamic mutation/crossover rates (default: True) |
+| Population | `--pop_size` | GA population size; omit to let the GAM guess — must be given together with `--early_stop` |
+| Early Stop | `--early_stop` | Generations without improvement before stopping; omit to let the GAM guess — must be given together with `--pop_size` |
+| Delta Penalty | `--delta_penalty` / `--no-delta_penalty` | Apply delta penalty (default: False) |
+| Repair | `--repair` / `--no-repair` | Repair invalid individuals (default: True) |
+| Norm Hypervolume | `--norm_hypervolume` / `--no-norm_hypervolume` | Normalize hypervolume calculation (default: False) |
+| Dynamic Rates | `--dynamic_rates` / `--no-dynamic_rates` | Use dynamic mutation/crossover rates (default: True) |
 | Parallel Jobs | `--n_jobs` | Number of parallel jobs for multiprocessing (default: all CPUs) |
-| Guess Params | `--guess_parameters` | Automatically estimate GA parameters using GAM (default: True) |
+| Lock Targets | `--lock_targets {0,1,2,3}` | Lock original source (1) / sink (2) / both (3) nodes against GA removal (default: 0) |
+| Guess Params | `--guess_parameters` / `--no-guess_parameters` | Estimate GA parameters using GAM (default: True); providing `--pop_size`/`--early_stop` disables guessing automatically |
 
 ### Python API
 
@@ -80,7 +84,7 @@ from EvoFlow.cli import run_evoflow
 run_evoflow(
     network="path/to/network.txt",
     annotation="path/to/annotation.txt",
-    file="path/to/data.h5ad",
+    expression_file="path/to/data.h5ad",
     regulons="path/to/regulons.csv",
     receptors_raw="GeneA|GeneB",
     mediators_raw="GeneC,GeneD",
@@ -88,10 +92,16 @@ run_evoflow(
     label="cell_type_column",
     celltype="TargetCellType",
     generations=1000,
+    # population_size + early_stop_gen are given together and
+    # automatically disable GAM guessing; omit both to let the GAM guess
     population_size=500,
+    early_stop_gen=100,
     # Optional arguments
-    early_stop=100,
     repair=True,
+    # Expression handling (bulk files with genes as rows):
+    # expression_transpose=True,
+    # expression_stat="mean",       # nonzero_ratio | mean | median | p90 | max
+    # expression_norm="cpm",        # none | cpm | log1p | minmax (ignored for nonzero_ratio)
 )
 ```
 
@@ -138,7 +148,7 @@ EvoFlow/
 
 ### Architecture
 
-1.  **Preprocessing**: The `BioNetworkPreparer` (`biology.py`) loads data, calculates "percolation" values (normalized gene expression), and builds the initial weighted graph.
+1.  **Preprocessing**: The `BioNetworkPreparer` (`biology.py`) loads data, reduces expression to a per-gene "percolation" value (configurable statistic and normalization), and builds the initial weighted graph.
 2.  **Topology Setup**: "SuperSource" and "SuperSink" nodes are added to model the flow from Ligands -> Receptors -> Mediators -> Targets.
 3.  **Active Subgraph**: The system extracts only the active subgraph (paths actually connecting sources to sinks) for optimization.
 4.  **Parameter Estimation (optional)**: The `GAOptimizer` extracts graph features (via `NetworkFeatures` in `features_extraction.py`) and uses a pre-trained GAM model (in `model.py`) to recommend optimal `population_size` and `early_stop_gen` values.

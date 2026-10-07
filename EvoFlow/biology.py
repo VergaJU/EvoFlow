@@ -1,3 +1,4 @@
+import numpy as np
 import pandas as pd
 import networkx as nx
 import scanpy as sc
@@ -5,6 +6,53 @@ import scipy as sp
 import time
 from anndata import AnnData
 from .preparer import prepare_flow_topology
+
+# Allowed values for BioNetworkPreparer.compute_percolation(); the CLI imports
+# these as argparse choices so engine and CLI cannot drift.
+EXPRESSION_STATS = ("nonzero_ratio", "mean", "median", "p90", "max")
+EXPRESSION_NORMS = ("none", "cpm", "log1p", "minmax")
+
+
+def normalize_expression(df: pd.DataFrame, method: str) -> pd.DataFrame:
+    """
+    Normalize a samples x genes expression matrix.
+
+    Args:
+        df: Dense numeric matrix with samples/cells as rows and genes as columns.
+        method: One of EXPRESSION_NORMS.
+
+    Returns:
+        Normalized copy of df (non-negative values preserved).
+    """
+    if method not in EXPRESSION_NORMS:
+        raise ValueError(
+            f"expression_norm must be one of {EXPRESSION_NORMS}, got {method!r}"
+        )
+    if method == "none":
+        return df
+    df = df.clip(lower=0.0)
+    if method == "cpm":
+        row_sums = df.sum(axis=1).replace(0.0, np.nan)
+        return df.div(row_sums, axis=0).fillna(0.0) * 1e6
+    if method == "log1p":
+        return pd.DataFrame(np.log1p(df), index=df.index, columns=df.columns)
+    # minmax: scale each gene (column) across samples to [0, 1]
+    col_min = df.min(axis=0)
+    span = (df.max(axis=0) - col_min).replace(0.0, np.nan)
+    return (df - col_min).div(span, axis=1).fillna(0.0)
+
+
+def transpose_expression(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Orient a genes-as-rows bulk expression table to samples x genes.
+
+    If the first column is non-numeric it is taken as gene IDs (index) before
+    transposing; all-numeric frames are transposed as-is.
+    """
+    first_col = df.columns[0]
+    if not pd.api.types.is_numeric_dtype(df[first_col]):
+        df = df.set_index(first_col)
+    return df.T
 
 
 class BioNetworkPreparer:
@@ -42,6 +90,7 @@ class BioNetworkPreparer:
         network_to_col: str = "to",
         network_weight_col: str = "weight",
         network_edge_type_col: str = "layer",
+        expression_transpose: bool = False,
         **kwargs,
     ):
         """
@@ -57,6 +106,9 @@ class BioNetworkPreparer:
             network_to_col (str): Network file column for target nodes. Default: "to".
             network_weight_col (str): Network file column for edge weights. Default: "weight".
             network_edge_type_col (str): Network file column for edge types. Default: "layer".
+            expression_transpose (bool): Bulk csv/tsv files have genes as rows (first
+                column gene IDs); set True to orient them to samples x genes.
+                Not supported for h5ad. Default: False.
             **kwargs: Additional keyword arguments for extensibility.
         """
         print(f"{time.ctime()} - Reading files")
@@ -79,14 +131,22 @@ class BioNetworkPreparer:
         ).squeeze()
 
         if expression_path:
+            if expression_transpose and expression_path.endswith(".h5ad"):
+                raise ValueError(
+                    "expression_transpose is only supported for csv/tsv expression "
+                    "files; h5ad is already samples x genes"
+                )
             try:
                 if expression_path.endswith(".h5ad"):
                     self.expression = sc.read(expression_path)
                 elif expression_path.endswith((".csv", ".tsv")):
-                    self.expression = pd.read_csv(
+                    df = pd.read_csv(
                         expression_path,
                         sep="\t" if expression_path.endswith(".tsv") else ",",
                     )
+                    if expression_transpose:
+                        df = transpose_expression(df)
+                    self.expression = df
                 else:
                     raise ValueError(
                         "Input must be anndata or tsv,csv expression matrices"
@@ -108,33 +168,85 @@ class BioNetworkPreparer:
         """
         self.expression = self.expression[self.expression.obs[label_col] == cell_type]
 
-    def compute_percolation(self):
+    def compute_percolation(self, stat: str = "nonzero_ratio", norm: str = "none"):
         """
-        Computes the proportion of gene-expressing cells to be used as percolation values and compute capacities of the edges.
+        Computes per-gene percolation values used to weight edge capacities.
+
+        The expression matrix is reduced to one non-negative value per gene
+        (columns are genes; samples/cells are rows), then scaled by its maximum
+        so percolation stays in (0, 1].
+
+        Args:
+            stat: Gene statistic, one of EXPRESSION_STATS. "nonzero_ratio"
+                (default) counts expressing samples and ignores `norm`.
+            norm: Normalization applied before the statistic for stats other
+                than "nonzero_ratio", one of EXPRESSION_NORMS.
+
+        Returns:
+            dict: annotation gene -> percolation value (0.0 for genes absent
+            from the expression matrix). `percolation_values` is set to False
+            when no expression data was loaded.
         """
-        # Export count matrix and transform it to a Series with count of gene-expressing cells
+        if stat not in EXPRESSION_STATS:
+            raise ValueError(
+                f"expression_stat must be one of {EXPRESSION_STATS}, got {stat!r}"
+            )
+        if norm not in EXPRESSION_NORMS:
+            raise ValueError(
+                f"expression_norm must be one of {EXPRESSION_NORMS}, got {norm!r}"
+            )
+        if self.expression is None:
+            self.percolation_values = False
+            return self.percolation_values
+
+        # Export count matrix to a samples x genes DataFrame
         if isinstance(self.expression, AnnData):
             df = pd.DataFrame(sp.sparse.csr_matrix.todense(self.expression.X))
             df.columns = self.expression.var_names
         else:
             df = self.expression.copy()
+        df = df.apply(pd.to_numeric, errors="coerce").fillna(0.0)
 
-        # Count the number of cells expressing each gene
-        df = df.astype("bool").sum()
-
-        # New Normalization Logic: Divide by the maximum count
-        max_count = df.max()
-
-        if max_count != 0:
-            df = df / max_count
+        if stat == "nonzero_ratio":
+            # Raw nonzero mask; normalization deliberately not applied
+            # (min-max would shift nonzero entries to zero).
+            values = df.astype("bool").sum()
         else:
-            df[:] = (
-                0.0  # Handle edge case where the expression matrix is entirely zeros
+            df = normalize_expression(df, norm)
+            if stat == "mean":
+                values = df.mean()
+            elif stat == "median":
+                values = df.median()
+            elif stat == "p90":
+                values = df.quantile(0.9)
+            else:  # max
+                values = df.max()
+
+        if (
+            len(values) > 0
+            and len(self.annotation) > 0
+            and not any(g in values.index for g in self.annotation.index)
+        ):
+            print(
+                "Warning: expression matrix shares no genes with the annotation; "
+                "percolation set to 0 everywhere. If the file has genes as rows, "
+                "pass expression_transpose=True (--expression_transpose)."
             )
 
-        # Create dictionary with proportion of gene-expressing cells
+        values = values.clip(lower=0.0)
+        max_value = values.max() if len(values) else 0.0
+        if max_value > 0:
+            values = values / max_value
+        else:
+            # Handle edge case where the expression matrix is entirely zeros
+            values = values * 0.0
+
+        # Create dictionary with per-gene percolation values. Cast to Python
+        # float: np.float32 (AnnData's default dtype) is not JSON-serializable
+        # and would break the cyjs/graphml savers downstream.
         self.percolation_values = {
-            i: df.loc[i] if i in df.index else 0.0 for i in self.annotation.index
+            i: float(values.loc[i]) if i in values.index else 0.0
+            for i in self.annotation.index
         }
         return self.percolation_values
 
@@ -355,6 +467,9 @@ class BioNetworkPreparer:
         targets: list = None,
         receptors: list = None,
         lock_targets: int = 0,
+        expression_stat: str = "nonzero_ratio",
+        expression_norm: str = "none",
+        expression_transpose: bool = False,
         **kwargs,
     ) -> tuple:
         """
@@ -367,8 +482,8 @@ class BioNetworkPreparer:
             expression_path (str): Path to expression data file (.h5ad, .csv, or .tsv).
             ligands (list, optional): List of ligand gene names. Use to auto-derive receptors from neighbors.
             mediators_list (list, optional): List of mediator/receptor gene names.
-            label (str, optional): Column name in AnnData obs for cell type filtering.
-            celltype (str, optional): Cell type to filter by.
+            label (str, optional): Column name in AnnData obs for cell type filtering (h5ad only).
+            celltype (str, optional): Cell type to filter by (h5ad only).
             regulons_path (str, optional): Path to regulons file for target identification.
             targets (list, optional): List of target genes (used if regulons_path is None).
             receptors (list, optional): List of receptor gene names to use as source nodes directly.
@@ -377,6 +492,12 @@ class BioNetworkPreparer:
                 1: Original source nodes are locked into final_sources.
                 2: Original sink nodes are locked into final_sinks.
                 3: Both source and sink nodes are locked.
+            expression_stat (str): Per-gene statistic for percolation, one of
+                EXPRESSION_STATS (default: "nonzero_ratio").
+            expression_norm (str): Normalization applied before the statistic
+                (ignored for "nonzero_ratio"), one of EXPRESSION_NORMS (default: "none").
+            expression_transpose (bool): Orient genes-as-rows csv/tsv bulk files to
+                samples x genes. Not supported for h5ad (default: False).
             **kwargs: Additional parameters for column name customization:
                 - annotation_index_col: Custom annotation index column name (default: "gene")
                 - network_start_col: Custom network start column name (default: "start")
@@ -389,8 +510,24 @@ class BioNetworkPreparer:
                    and sources/sinks are lists for flow optimization.
 
         Raises:
-            ValueError: If ligands and receptors are both missing or both provided, or if both regulons_path and targets are None.
+            ValueError: If ligands and receptors are both missing or both provided, if both
+                regulons_path and targets are None, if expression_stat/expression_norm are
+                invalid, or if only one of label/celltype is given.
         """
+        if expression_stat not in EXPRESSION_STATS:
+            raise ValueError(
+                f"expression_stat must be one of {EXPRESSION_STATS}, got {expression_stat!r}"
+            )
+        if expression_norm not in EXPRESSION_NORMS:
+            raise ValueError(
+                f"expression_norm must be one of {EXPRESSION_NORMS}, got {expression_norm!r}"
+            )
+        if (label is None) != (celltype is None):
+            raise ValueError(
+                "label and celltype must be provided together (both for h5ad cell "
+                "filtering, or both omitted)"
+            )
+
         # Input validation - check for ligands/receptors
         has_ligands = ligands is not None and len(ligands) > 0
         has_receptors = receptors is not None and len(receptors) > 0
@@ -417,15 +554,25 @@ class BioNetworkPreparer:
 
         # Load data with custom column names if provided
         self.load_data(
-            network_path, annotation_path, expression_path, regulons_path, **kwargs
+            network_path,
+            annotation_path,
+            expression_path,
+            regulons_path,
+            expression_transpose=expression_transpose,
+            **kwargs,
         )
 
-        # Filter expression data if AnnData
-        if isinstance(self.expression, AnnData):
+        # Filter expression data (AnnData/cell metadata only)
+        if isinstance(self.expression, AnnData) and label is not None:
             self.filter_expression_data(label, celltype)
+        elif label is not None:
+            print(
+                "Warning: label/celltype filtering only applies to h5ad expression "
+                "data; ignoring."
+            )
 
         # Compute percolation
-        self.compute_percolation()
+        self.compute_percolation(stat=expression_stat, norm=expression_norm)
 
         # Build base network (column names are now stored in instance)
         self.build_base_network()

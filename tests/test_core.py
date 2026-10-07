@@ -190,6 +190,32 @@ def test_pipeline_integration(simple_graph):
     assert len(logs) == 2
 
 
+def test_run_rejects_guess_with_specified_parameters(complex_graph):
+    opt = GAOptimizer(
+        complex_graph,
+        ["SuperSource"],
+        ["SuperSink"],
+        n_jobs=1,
+        use_multiprocessing=False,
+    )
+    with pytest.raises(ValueError):
+        opt.run(population_size=5, early_stop_gen=10, guess_parameters=True)
+
+
+def test_run_rejects_no_guess_with_missing_parameters(complex_graph):
+    opt = GAOptimizer(
+        complex_graph,
+        ["SuperSource"],
+        ["SuperSink"],
+        n_jobs=1,
+        use_multiprocessing=False,
+    )
+    with pytest.raises(ValueError):
+        opt.run(population_size=5, guess_parameters=False)
+    with pytest.raises(ValueError):
+        opt.run(guess_parameters=False)
+
+
 def test_guess_parameters_direct(complex_graph):
     sources = ["SuperSource"]
     sinks = ["SuperSink"]

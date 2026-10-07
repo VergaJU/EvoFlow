@@ -47,7 +47,9 @@ def plot_optimization_history(logs, filename_prefix):
         logs_df = logs.copy()
         if "gen" not in logs_df.columns:
             logs_df = logs_df.reset_index(names="gen")
-    logs_df = logs_df.drop("visited_nodes", axis=1)
+    # summary_logs (returned by GAOptimizer.run) exclude visited_nodes;
+    # expanded logs include it. Drop it if present.
+    logs_df = logs_df.drop("visited_nodes", axis=1, errors="ignore")
     # choose the order of known metrics first so plots are predictable
     known_order = [
         "Flow",
@@ -170,12 +172,18 @@ def plot_node_attribute(
             )
         value = attrs[attribute]
         try:
-            attribute_values.append(float(value))
+            value = float(value)
         except (TypeError, ValueError):
             raise ValueError(
                 f"Attribute '{attribute}' in node '{node}' has non-numeric value: {value}. "
                 f"Only numeric attributes are supported."
             )
+        if not np.isfinite(value):
+            continue
+        attribute_values.append(value)
+
+    if not attribute_values:
+        raise ValueError(f"Attribute '{attribute}' has no finite values to plot.")
 
     weight_sequence = sorted(attribute_values, reverse=True)
 
@@ -372,12 +380,20 @@ def plot_edge_attribute(
             )
         value = attrs[attribute]
         try:
-            attribute_values.append(float(value))
+            value = float(value)
         except (TypeError, ValueError):
             raise ValueError(
                 f"Attribute '{attribute}' in edge ({u}, {v}) has non-numeric value: {value}. "
                 f"Only numeric attributes are supported."
             )
+        # Dummy/sentinel edges carry inf capacities by design; exclude them
+        # from distributions (np.histogram rejects non-finite ranges).
+        if not np.isfinite(value):
+            continue
+        attribute_values.append(value)
+
+    if not attribute_values:
+        raise ValueError(f"Attribute '{attribute}' has no finite values to plot.")
 
     weight_sequence = sorted(attribute_values, reverse=True)
 
