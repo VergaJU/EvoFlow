@@ -1,8 +1,13 @@
+import numpy as np
 import pandas as pd
 import networkx as nx
 import pytest
 from unittest.mock import patch
-from EvoFlow.biology import BioNetworkPreparer
+from EvoFlow.biology import (
+    BioNetworkPreparer,
+    normalize_expression,
+    transpose_expression,
+)
 
 
 def test_initialization():
@@ -48,41 +53,12 @@ def test_load_data(mock_net_df, mock_annotation, mock_anndata):
 
 def test_percolation_logic(mock_annotation, mock_anndata):
     prep = BioNetworkPreparer()
-    prep.annotation = mock_annotation
     prep.expression = mock_anndata
 
-    # Manually setting up a scenario:
-    # 3 "Type X" cells.
-    # Gene A: Present in 1 (33%)
-    # Gene B: Present in 2 (66%)
-
-    # We need to manually filter adata first (mocking filter_expression_data logic)
-    # Since our fixture mock_anndata is a Mock, we can't easily rely on real pandas filtering inside the class
-    # So we'll mock the internal state of prep.adata after filtering.
-
-    # Let's say filtered matrix has 2 cells
-    # Cell 1: [1, 0, ...]
-    # Cell 2: [1, 1, ...]
-    # Sum:    [2, 1, ...]
-    # Prop:   [1.0, 0.5] -> Normalized: (x - min)/(max - min)
-
-    # Instead of complex matrix math on mocks, let's verify the logic flow using a simpler mocked scenario
-    # within the class method if possible, or trust the integration test.
-
-    # Actually, let's use the method directly but with a real (small) AnnData if possible,
-    # OR inject the dataframes.
-
-    # Injecting prepared data into the method logic:
-    # The method uses: sp.sparse.csr_matrix.todense(self.adata.X)
-
-    # Logic in method:
-    # df = [2, 1] (sum)
-    # min=1, max=2
-    # norm = (val - 1) / (2 - 1) => (val - 1)
-    # A: 2 -> 1.0
-    # B: 1 -> 0.0
-
-    # Mock annotation to match keys
+    # 4 cells x 5 genes (A..E); nonzero counts per gene:
+    #   A=4, B=0, C=2, D=1, E=3
+    # Default stat "nonzero_ratio" divides by the max count (4):
+    #   A=1.0, B=0.0, C=0.5, D=0.25, E=0.75
     prep.annotation = pd.Series(
         ["type"] * len(prep.expression.var_names), index=prep.expression.var_names
     )
@@ -91,6 +67,9 @@ def test_percolation_logic(mock_annotation, mock_anndata):
 
     assert percolation["A"] == 1.0
     assert percolation["B"] == 0.0
+    assert percolation["C"] == 0.5
+    assert percolation["D"] == 0.25
+    assert percolation["E"] == 0.75
 
 
 def test_build_network(mock_net_df, mock_annotation):
@@ -370,3 +349,253 @@ def test_prepare_bioflow_topology_lock_targets_full():
     # lock_targets=3: both original source_nodes (B) and sink_nodes (D) should be locked
     assert "B" in sources
     assert "D" in sinks
+
+
+# --- Percolation stat/norm tests (bulk expression support) ---
+
+
+def _prep_with_anndata(mock_anndata):
+    prep = BioNetworkPreparer()
+    prep.expression = mock_anndata
+    prep.annotation = pd.Series(["type"] * 5, index=list("ABCDE"))
+    return prep
+
+
+@pytest.mark.parametrize(
+    "stat,expected",
+    [
+        ("mean", {"A": 1.0, "B": 0.0, "C": 0.5, "D": 0.25, "E": 0.75}),
+        ("median", {"A": 1.0, "B": 0.0, "C": 0.5, "D": 0.0, "E": 1.0}),
+        ("max", {"A": 1.0, "B": 0.0, "C": 1.0, "D": 1.0, "E": 1.0}),
+        ("p90", {"A": 1.0, "B": 0.0, "C": 1.0, "D": 0.7, "E": 1.0}),
+    ],
+)
+def test_percolation_stats(mock_anndata, stat, expected):
+    prep = _prep_with_anndata(mock_anndata)
+    percolation = prep.compute_percolation(stat=stat)
+    for gene, value in expected.items():
+        assert percolation[gene] == pytest.approx(value)
+
+
+@pytest.mark.parametrize(
+    "norm,expected",
+    [
+        # Row sums are [2, 3, 4, 1]; CPM per gene then divided by max (gene A)
+        ("cpm", {"A": 1.0, "B": 0.0, "C": 0.28, "D": 0.12, "E": 0.52}),
+        # Data is binary, so log1p(mean) mirrors the raw mean profile
+        ("log1p", {"A": 1.0, "B": 0.0, "C": 0.5, "D": 0.25, "E": 0.75}),
+        # Constant genes (A, B) collapse to 0 under per-gene min-max
+        ("minmax", {"A": 0.0, "B": 0.0, "C": 2 / 3, "D": 1 / 3, "E": 1.0}),
+    ],
+)
+def test_percolation_mean_with_norm(mock_anndata, norm, expected):
+    prep = _prep_with_anndata(mock_anndata)
+    percolation = prep.compute_percolation(stat="mean", norm=norm)
+    for gene, value in expected.items():
+        assert percolation[gene] == pytest.approx(value)
+    assert all(0.0 <= v <= 1.0 for v in percolation.values())
+
+
+def test_nonzero_ratio_ignores_norm(mock_anndata):
+    prep = _prep_with_anndata(mock_anndata)
+    baseline = prep.compute_percolation(stat="nonzero_ratio", norm="none")
+    for norm in ("cpm", "log1p", "minmax"):
+        assert prep.compute_percolation(stat="nonzero_ratio", norm=norm) == baseline
+
+
+def test_percolation_zero_matrix_gives_zeros():
+    prep = BioNetworkPreparer()
+    prep.expression = pd.DataFrame(
+        [[0, 0], [0, 0]], columns=["A", "B"], index=["S1", "S2"]
+    )
+    prep.annotation = pd.Series(["type"] * 2, index=["A", "B"])
+    percolation = prep.compute_percolation()
+    assert percolation == {"A": 0.0, "B": 0.0}
+
+
+def test_percolation_without_expression_is_falsy(mock_annotation):
+    prep = BioNetworkPreparer()
+    prep.annotation = mock_annotation
+    assert prep.compute_percolation() is False
+
+
+def test_percolation_zero_overlap_prints_warning(mock_annotation, capsys):
+    prep = BioNetworkPreparer()
+    prep.annotation = mock_annotation
+    prep.expression = pd.DataFrame([[1, 2]], columns=["X", "Y"])
+    percolation = prep.compute_percolation()
+    assert percolation == {g: 0.0 for g in mock_annotation.index}
+    assert "shares no genes" in capsys.readouterr().out
+
+
+def test_compute_percolation_rejects_invalid_args(mock_anndata):
+    prep = _prep_with_anndata(mock_anndata)
+    with pytest.raises(ValueError, match="expression_stat"):
+        prep.compute_percolation(stat="mode")
+    with pytest.raises(ValueError, match="expression_norm"):
+        prep.compute_percolation(norm="quantile")
+
+
+# --- normalize_expression / transpose_expression units ---
+
+
+def test_normalize_expression_cpm():
+    df = pd.DataFrame([[1, 1], [0, 0]], columns=["A", "B"], index=["S1", "S2"])
+    out = normalize_expression(df, "cpm")
+    assert out.loc["S1"].tolist() == pytest.approx([500_000.0, 500_000.0])
+    assert out.loc["S2"].tolist() == pytest.approx([0.0, 0.0])
+
+
+def test_normalize_expression_log1p():
+    df = pd.DataFrame([[0.0, 1.0]], columns=["A", "B"])
+    out = normalize_expression(df, "log1p")
+    assert out.iloc[0, 0] == 0.0
+    assert out.iloc[0, 1] == pytest.approx(np.log(2))
+
+
+def test_normalize_expression_minmax():
+    df = pd.DataFrame([[0.0, 5.0, 3.0], [10.0, 5.0, 7.0]], columns=["A", "B", "C"])
+    out = normalize_expression(df, "minmax")
+    assert out["A"].tolist() == pytest.approx([0.0, 1.0])
+    # Constant gene -> all zeros (no division by zero)
+    assert out["B"].tolist() == pytest.approx([0.0, 0.0])
+    assert out["C"].tolist() == pytest.approx([0.0, 1.0])
+
+
+def test_normalize_expression_none_passthrough():
+    df = pd.DataFrame([[1.0]])
+    assert normalize_expression(df, "none") is df
+
+
+def test_normalize_expression_rejects_unknown_method():
+    with pytest.raises(ValueError, match="expression_norm"):
+        normalize_expression(pd.DataFrame([[1.0]]), "quantile")
+
+
+def test_transpose_expression_with_gene_column():
+    df = pd.DataFrame({"gene": ["A", "B"], "S1": [1, 0], "S2": [0, 2]})
+    out = transpose_expression(df)
+    assert list(out.index) == ["S1", "S2"]
+    assert list(out.columns) == ["A", "B"]
+    assert out.loc["S1", "A"] == 1
+
+
+def test_transpose_expression_all_numeric_is_plain_transpose():
+    df = pd.DataFrame([[1, 2, 3], [4, 5, 6]])
+    out = transpose_expression(df)
+    assert out.shape == (3, 2)
+    assert out.iloc[0, 0] == 1
+    assert out.iloc[2, 1] == 6
+
+
+# --- load_data orientation tests (real files) ---
+
+
+def _write_minimal_io(tmp_path):
+    (tmp_path / "net.tsv").write_text(
+        "start\tto\tweight\tlayer\nA\tB\t1.0\tactivation\n"
+    )
+    (tmp_path / "ann.tsv").write_text("gene\tnode_type\nA\tligand\nB\ttarget\n")
+
+
+def _read_expr(tmp_path, expression_transpose):
+    _write_minimal_io(tmp_path)
+    prep = BioNetworkPreparer()
+    prep.load_data(
+        str(tmp_path / "net.tsv"),
+        str(tmp_path / "ann.tsv"),
+        str(tmp_path / "expr.csv"),
+        expression_transpose=expression_transpose,
+    )
+    return prep.expression
+
+
+def test_load_data_transpose_genes_as_rows(tmp_path):
+    (tmp_path / "expr.csv").write_text("gene,S1,S2\nA,1,0\nB,0,2\n")
+    df = _read_expr(tmp_path, expression_transpose=True)
+    assert list(df.index) == ["S1", "S2"]
+    assert list(df.columns) == ["A", "B"]
+    assert df.loc["S1", "A"] == 1
+
+
+def test_load_data_transpose_unnamed_first_column(tmp_path):
+    (tmp_path / "expr.csv").write_text(",S1,S2\nA,1,0\nB,0,2\n")
+    df = _read_expr(tmp_path, expression_transpose=True)
+    assert list(df.index) == ["S1", "S2"]
+    assert list(df.columns) == ["A", "B"]
+
+
+def test_load_data_transpose_all_numeric_first_column(tmp_path):
+    (tmp_path / "expr.csv").write_text("1,2,3\n4,5,6\n7,8,9\n")
+    df = _read_expr(tmp_path, expression_transpose=True)
+    assert df.shape == (3, 2)
+    assert df.iloc[0, 0] == 4
+    assert df.iloc[2, 1] == 9
+
+
+def test_load_data_default_orientation_unchanged(tmp_path):
+    (tmp_path / "expr.csv").write_text("gene,S1,S2\nA,1,0\nB,0,2\n")
+    df = _read_expr(tmp_path, expression_transpose=False)
+    assert list(df.columns) == ["gene", "S1", "S2"]
+    assert len(df) == 2
+
+
+def test_load_data_rejects_transpose_with_h5ad(tmp_path):
+    _write_minimal_io(tmp_path)
+    prep = BioNetworkPreparer()
+    with pytest.raises(ValueError, match="only supported"):
+        prep.load_data(
+            str(tmp_path / "net.tsv"),
+            str(tmp_path / "ann.tsv"),
+            str(tmp_path / "expr.h5ad"),
+            expression_transpose=True,
+        )
+
+
+def test_prepare_network_rejects_half_label_pair():
+    prep = BioNetworkPreparer()
+    with pytest.raises(ValueError, match="together"):
+        prep.prepare_network(
+            network_path="net",
+            annotation_path="ann",
+            expression_path="expr",
+            ligands=["A"],
+            targets=["B"],
+            label="celltype",
+        )
+
+
+def test_prepare_network_rejects_invalid_stat_and_norm():
+    prep = BioNetworkPreparer()
+    with pytest.raises(ValueError, match="expression_stat"):
+        prep.prepare_network(
+            network_path="net",
+            annotation_path="ann",
+            expression_path="expr",
+            ligands=["A"],
+            targets=["B"],
+            expression_stat="mode",
+        )
+    with pytest.raises(ValueError, match="expression_norm"):
+        prep.prepare_network(
+            network_path="net",
+            annotation_path="ann",
+            expression_path="expr",
+            ligands=["A"],
+            targets=["B"],
+            expression_norm="quantile",
+        )
+
+
+def test_percolation_values_are_python_floats(mock_anndata):
+    """AnnData X is float32; np.float32 is not JSON-serializable (cyjs saver)."""
+    prep = _prep_with_anndata(mock_anndata)
+    for stat, norm in [
+        ("nonzero_ratio", "none"),
+        ("mean", "cpm"),
+        ("median", "log1p"),
+        ("max", "minmax"),
+    ]:
+        percolation = prep.compute_percolation(stat=stat, norm=norm)
+        # np.float32 is not a float subclass, so isinstance filters it out
+        assert all(isinstance(v, float) for v in percolation.values())

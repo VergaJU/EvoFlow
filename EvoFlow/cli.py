@@ -3,7 +3,7 @@ import os
 import time
 import pandas as pd
 import warnings
-from EvoFlow.biology import BioNetworkPreparer
+from EvoFlow.biology import EXPRESSION_NORMS, EXPRESSION_STATS, BioNetworkPreparer
 from EvoFlow.core import GAOptimizer, extract_active_subgraph
 from EvoFlow.visualization import (
     plot_optimization_history,
@@ -27,8 +27,13 @@ def run_evoflow(
     regulons: str = None,
     targets: str = None,
     lock_targets: int = 0,
+    expression_stat: str = "nonzero_ratio",
+    expression_norm: str = "none",
+    expression_transpose: bool = False,
     generations=10000,
-    population_size=1000,
+    population_size=None,
+    early_stop_gen=None,
+    guess_parameters=True,
     return_results=False,
     **kwargs,
 ):
@@ -47,13 +52,24 @@ def run_evoflow(
         celltype (str, optional): Cell type to filter by.
         regulons (str, optional): Path to regulons file for target identification.
         targets (str, optional): Comma-delimited list of target genes (if regulons not used).
-        lock_targets (int): Bitmask controlling which original nodes are locked into sources/sinks.
+        lock_targets (int): Bitmask controlling which original nodes are locked as sources/sinks.
             0 (default): No locking.
             1: Original source nodes are locked into final_sources.
             2: Original sink nodes are locked into final_sinks.
             3: Both source and sink nodes are locked.
+        expression_stat (str): Per-gene statistic for percolation, one of
+            EXPRESSION_STATS (default: "nonzero_ratio").
+        expression_norm (str): Normalization applied before the statistic
+            (ignored for "nonzero_ratio"), one of EXPRESSION_NORMS (default: "none").
+        expression_transpose (bool): Orient genes-as-rows csv/tsv bulk expression
+            files to samples x genes (default: False; not applicable to h5ad).
         generations (int): Number of GA generations (default 10000).
-        population_size (int): GA population size (default 1000).
+        population_size (int, optional): GA population size. Must be given together
+            with early_stop_gen; providing either disables GAM guessing.
+        early_stop_gen (int, optional): Generations without improvement before
+            stopping. Must be given together with population_size.
+        guess_parameters (bool): Estimate GA parameters with the GAM when
+            population_size/early_stop_gen are omitted (default True).
         return_results (bool): If True, return results; if False, return filename_prefix.
         **kwargs: Additional keyword arguments passed to GAOptimizer.
 
@@ -61,6 +77,27 @@ def run_evoflow(
         If return_results is True: (best_nodes_removed, logs, pop, norm)
         Otherwise: filename_prefix (str)
     """
+    if (population_size is None) != (early_stop_gen is None):
+        raise ValueError(
+            "population_size and early_stop_gen must be given together, "
+            "or both omitted to let the GAM guess."
+        )
+    if population_size is not None:
+        guess_parameters = False
+    if expression_stat not in EXPRESSION_STATS:
+        raise ValueError(
+            f"expression_stat must be one of {EXPRESSION_STATS}, got {expression_stat!r}"
+        )
+    if expression_norm not in EXPRESSION_NORMS:
+        raise ValueError(
+            f"expression_norm must be one of {EXPRESSION_NORMS}, got {expression_norm!r}"
+        )
+    if (label is None) != (celltype is None):
+        raise ValueError(
+            "label and celltype must be provided together (both for h5ad cell "
+            "filtering, or both omitted)"
+        )
+
     warnings.filterwarnings("ignore")
 
     # Process Inputs (Logic moved from main)
@@ -101,6 +138,9 @@ def run_evoflow(
             regulons_path=regulons,
             targets=targets_list,
             lock_targets=lock_targets,
+            expression_stat=expression_stat,
+            expression_norm=expression_norm,
+            expression_transpose=expression_transpose,
         )
     except ValueError as e:
         print(f"Error during network preparation: {e}")
@@ -140,7 +180,11 @@ def run_evoflow(
 
     # Run GA
     best_nodes_removed, logs, pop, norm = optimizer.run(
-        population_size=population_size, generations=generations, **kwargs
+        population_size=population_size,
+        early_stop_gen=early_stop_gen,
+        guess_parameters=guess_parameters,
+        generations=generations,
+        **kwargs,
     )
 
     # --- Results ---
@@ -180,15 +224,84 @@ def main():
     parser.add_argument("-b", "--receptors", required=True)
     parser.add_argument("-m", "--mediators", required=True)
     parser.add_argument("-s", "--ligands", required=True)
-    parser.add_argument("-l", "--label", required=True)
-    parser.add_argument("-c", "--celltype", required=True)
+    parser.add_argument(
+        "-l",
+        "--label",
+        default=None,
+        help="obs column for cell type filtering (h5ad only; requires --celltype)",
+    )
+    parser.add_argument(
+        "-c",
+        "--celltype",
+        default=None,
+        help="Cell type to filter by (h5ad only; requires --label)",
+    )
+    parser.add_argument(
+        "--expression_stat",
+        choices=EXPRESSION_STATS,
+        default="nonzero_ratio",
+        help="Per-gene statistic used for percolation (default: nonzero_ratio)",
+    )
+    parser.add_argument(
+        "--expression_norm",
+        choices=EXPRESSION_NORMS,
+        default="none",
+        help="Expression normalization applied before --expression_stat; ignored "
+        "for nonzero_ratio (default: none)",
+    )
+    parser.add_argument(
+        "--expression_transpose",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Expression file has genes as rows (bulk csv/tsv with gene IDs as "
+        "first column); transpose to samples x genes (default: False)",
+    )
     parser.add_argument("--generations", type=int, default=10000)
-    parser.add_argument("--pop_size", type=int, default=1000)
-    parser.add_argument("--early_stop", type=int, default=100)
-    parser.add_argument("--delta_penalty", type=bool, default=False)
-    parser.add_argument("--repair", type=bool, default=True)
-    parser.add_argument("--norm_hypervolume", type=bool, default=False)
-    parser.add_argument("--dynamic_rates", type=bool, default=True)
+    parser.add_argument(
+        "--pop_size",
+        type=int,
+        default=None,
+        help="GA population size (omit to let the GAM guess; "
+        "must be given together with --early_stop)",
+    )
+    parser.add_argument(
+        "--early_stop",
+        type=int,
+        default=None,
+        help="Generations without improvement before stopping "
+        "(omit to let the GAM guess; must be given together with --pop_size)",
+    )
+    parser.add_argument(
+        "--guess_parameters",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Estimate GA parameters with the GAM (default: True). Providing "
+        "--pop_size/--early_stop disables guessing automatically.",
+    )
+    parser.add_argument(
+        "--delta_penalty",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Apply delta penalty (default: False)",
+    )
+    parser.add_argument(
+        "--repair",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Repair invalid individuals (default: True)",
+    )
+    parser.add_argument(
+        "--norm_hypervolume",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Normalize hypervolume calculation (default: False)",
+    )
+    parser.add_argument(
+        "--dynamic_rates",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Use dynamic mutation/crossover rates (default: True)",
+    )
     parser.add_argument(
         "--n_jobs",
         type=int,
@@ -205,11 +318,24 @@ def main():
 
     args = parser.parse_args()
 
+    if (args.pop_size is None) != (args.early_stop is None):
+        parser.error(
+            "--pop_size and --early_stop must be provided together "
+            "(or both omitted to let the GAM guess)"
+        )
+    if not args.guess_parameters and args.pop_size is None:
+        parser.error("--no-guess_parameters requires both --pop_size and --early_stop")
+    if (args.label is None) != (args.celltype is None):
+        parser.error(
+            "--label and --celltype must be provided together "
+            "(both for h5ad cell filtering, or both omitted)"
+        )
+
     # Call the new function using arguments from the CLI
     run_evoflow(
         network=args.network,
         annotation=args.annotation,
-        file=args.file,
+        expression_file=args.file,
         regulons=args.regulons,
         receptors_raw=args.receptors,
         mediators_raw=args.mediators,
@@ -217,8 +343,17 @@ def main():
         label=args.label,
         celltype=args.celltype,
         lock_targets=args.lock_targets,
+        expression_stat=args.expression_stat,
+        expression_norm=args.expression_norm,
+        expression_transpose=args.expression_transpose,
         generations=args.generations,
-        pop_size=args.pop_size,
+        population_size=args.pop_size,
+        early_stop_gen=args.early_stop,
+        guess_parameters=args.guess_parameters,
+        delta_penalty=args.delta_penalty,
+        repair=args.repair,
+        norm_hypervolume=args.norm_hypervolume,
+        dynamic=args.dynamic_rates,
         n_jobs=args.n_jobs,
     )
 
