@@ -1,8 +1,8 @@
 # Vignettes
 
-End-to-end examples that run the full R + Python workflow. They are designed
-to be executed inside the provided container
-({doc}`../container`), where R, NicheNet and EvoFlow are pre-installed.
+End-to-end examples that run the full NicheNet + EvoFlow workflow. They are
+designed to be executed inside the provided container
+({doc}`../container`), where EvoFlow, NicheNetPy and pertpy are pre-installed.
 
 ```{toctree}
 :maxdepth: 1
@@ -14,7 +14,7 @@ use_case
 
 {doc}`use_case` walks through a realistic analysis:
 
-1. **R / NicheNet** — from a short table of receptors of interest and target
+1. **NicheNetPy** — from a short table of receptors of interest and target
    genes, infer a weighted ligand-to-target signalling network and an
    annotation table.
 2. **Expression data** — load the `kang_2018` PBMC dataset with `pertpy`,

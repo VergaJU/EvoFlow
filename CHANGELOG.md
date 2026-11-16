@@ -33,9 +33,9 @@ First public release, distributed on PyPI as `evoflow-bio` (import name
   distributions and network export (GraphML, Cytoscape JSON).
 - Full Sphinx API documentation on Read the Docs, including a pre-executed
   end-to-end vignette.
-- R + Python Docker image published to GHCR
-  (`ghcr.io/vergaju/evoflow`) based on the Jupyter Data Science stack, with
-  NicheNet pre-installed for upstream network inference.
+- Jupyter Docker image published to GHCR (`ghcr.io/vergaju/evoflow`) based on
+  the Jupyter SciPy stack, with NicheNetPy and pertpy pre-installed for
+  upstream network inference and example data.
 - GitHub Actions workflows for CI, GHCR image publishing and PyPI Trusted
   Publishing.
 

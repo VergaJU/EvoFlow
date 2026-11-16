@@ -28,7 +28,7 @@ Optional extras:
 
 ```bash
 pip install "evoflow-bio[docs]"      # Sphinx toolchain for the documentation
-pip install "evoflow-bio[vignette]"  # pertpy, used by the use-case notebook
+pip install "evoflow-bio[vignette]"  # nichenetpy + pertpy for the vignette
 ```
 
 For development, clone the repository and install it in editable mode:
@@ -40,10 +40,10 @@ pip install -e ".[dev]"
 pytest
 ```
 
-### R + Python container
+### Jupyter container
 
-The full workflow (NicheNet in R + EvoFlow in Python) can be run from the
-published Jupyter container:
+The full workflow (NicheNet inference with NicheNetPy + EvoFlow) can be run
+from the published Jupyter container:
 
 ```bash
 docker run --rm -p 8888:8888 ghcr.io/vergaju/evoflow:latest
@@ -179,7 +179,7 @@ EvoFlow/
 │   └── cli.py               # Command-line entry point
 ├── tests/                   # pytest suite
 ├── docs/                    # Sphinx sources, API reference and the vignette
-├── docker/                  # R + Python Jupyter image
+├── docker/                  # Jupyter image (EvoFlow + NicheNetPy + pertpy)
 └── .github/workflows/       # CI, GHCR and PyPI release workflows
 ```
 

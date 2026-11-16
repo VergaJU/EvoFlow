@@ -39,7 +39,7 @@ Optional extras:
 
 ```bash
 pip install "evoflow-bio[docs]"      # Sphinx toolchain to build these docs
-pip install "evoflow-bio[vignette]"  # pertpy, used by the use-case notebook
+pip install "evoflow-bio[vignette]"  # nichenetpy + pertpy for the vignette
 ```
 
 Verify the install:
@@ -50,7 +50,7 @@ evoflow --help
 
 ### Container
 
-A reproducible R + Python Jupyter image with NicheNet and EvoFlow
+A reproducible Jupyter image with EvoFlow, NicheNetPy and pertpy
 pre-installed is published on the GitHub Container Registry:
 
 ```bash

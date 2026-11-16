@@ -58,6 +58,7 @@ docs = [
 ]
 vignette = [
     "pertpy>=0.10",
+    "nichenetpy>=1.0.4",
 ]
 
 [project.scripts]

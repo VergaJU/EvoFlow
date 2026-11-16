@@ -52,8 +52,8 @@ napoleon_use_param = True
 napoleon_use_rtype = False
 
 # -- MyST / notebooks --------------------------------------------------------
-# Notebooks are committed pre-executed; Read the Docs must not try to run the
-# R/NicheNet/Docker parts of the workflow during a documentation build.
+# Notebooks are committed pre-executed; Read the Docs must not try to download
+# the NicheNet/pertpy reference data during a documentation build.
 nb_execution_mode = "off"
 nb_merge_streams = True
 nb_output_stderr = "show"

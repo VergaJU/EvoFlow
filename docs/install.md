@@ -16,7 +16,7 @@ Python 3.10–3.12 is supported.
 | Extra       | Contents                                   | Use case                          |
 | ----------- | ------------------------------------------ | --------------------------------- |
 | `docs`      | `sphinx`, `furo`, `myst-nb`, `copybutton`  | Build these documentation pages   |
-| `vignette`  | `pertpy`                                   | Run the use-case notebook         |
+| `vignette`  | `pertpy`, `nichenetpy`                     | Run the use-case notebook         |
 | `dev`       | `ruff`, `pytest`, `pytest-mock`, `pre-commit` | Development and tests          |
 
 ```bash
@@ -36,9 +36,9 @@ pytest
 
 ## Docker
 
-If you also need R and NicheNet (for the upstream signalling-network
-inference), use the published container instead of installing R locally. See
-{doc}`container`.
+If you also need NicheNet inference and the example single-cell dataset, use
+the published container (or install the `vignette` extra, which pulls in
+`nichenetpy` and `pertpy`). See {doc}`container`.
 
 ## Building the documentation locally
 

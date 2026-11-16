@@ -1,15 +1,15 @@
 # Container
 
-A reproducible container with **R**, **NicheNet**, **JupyterLab** and
-**EvoFlow** is published on the GitHub Container Registry:
+A reproducible Jupyter container with **EvoFlow**, **NicheNetPy**, **pertpy**
+and their scientific Python dependencies is published on the GitHub Container
+Registry:
 
 ```text
 ghcr.io/vergaju/evoflow
 ```
 
-It is built from a pinned date tag of
-`quay.io/jupyter/datascience-notebook`, so the R and Python stacks are
-reproducible.
+It is built from a pinned date tag of `quay.io/jupyter/scipy-notebook`, so the
+Python stack is reproducible.
 
 ## Pull and run
 
@@ -52,14 +52,14 @@ The pre-installed vignette lives inside the image at:
 It is the same notebook rendered in {doc}`vignettes/index`. Run it top to
 bottom to:
 
-1. infer a signalling network with NicheNet (R),
+1. infer a signalling network with NicheNetPy,
 2. load a single-cell dataset containing NK cells with `pertpy`,
 3. run the EvoFlow genetic algorithm on the resulting network,
 4. inspect and interpret the knock-out candidates.
 
-The first run downloads the NicheNet reference networks from Zenodo (about
-1 GB), so it needs internet access. `pertpy` downloads the `kang_2018` dataset
-(about 38 MB) into its local dataset directory.
+The first run downloads the NicheNet reference model from Zenodo (about
+600 MB) and `pertpy` downloads the `kang_2018` dataset (about 38 MB). Both are
+cached for subsequent runs.
 
 ## Building the image locally
 
@@ -71,17 +71,15 @@ docker build -f docker/Dockerfile -t evoflow:dev .
 
 The Dockerfile accepts these build arguments:
 
-| Argument           | Default                                             | Meaning                                      |
-| ------------------ | --------------------------------------------------- | -------------------------------------------- |
-| `BASE_IMAGE`       | `quay.io/jupyter/datascience-notebook:2026-11-02`   | Pinned Jupyter Data Science image            |
-| `INSTALL_MODE`     | `local`                                             | `local` builds from the checkout; `pypi` installs `evoflow-bio==EVOFLOW_VERSION` |
-| `EVOFLOW_VERSION`  | `1.0.0`                                             | Version installed in `pypi` mode             |
-| `NICHENET_REF`     | pinned commit                                       | NicheNet git ref installed from GitHub       |
+| Argument           | Default                                       | Meaning                                      |
+| ------------------ | --------------------------------------------- | -------------------------------------------- |
+| `BASE_IMAGE`       | `quay.io/jupyter/scipy-notebook:2026-11-02`    | Pinned Jupyter SciPy image                   |
+| `INSTALL_MODE`     | `local`                                       | `local` builds from the checkout; `pypi` installs `evoflow-bio==EVOFLOW_VERSION` |
+| `EVOFLOW_VERSION`  | `1.0.0`                                       | Version installed in `pypi` mode             |
 
 ## What is inside
 
-- **R** and the Jupyter R kernel from the upstream image.
-- **NicheNet** (`saeyslab/nichenetr`) and its Bioconductor dependencies.
+- **Python** and JupyterLab from the upstream SciPy image.
 - **EvoFlow** itself (local or PyPI, depending on `INSTALL_MODE`).
-- The vignette notebook and the NicheNet helper script under
-  `/home/jovyan/work/vignettes/`.
+- **NicheNetPy** and **pertpy** (the `vignette` extra), used by the notebook.
+- The vignette notebook under `/home/jovyan/work/vignettes/`.
