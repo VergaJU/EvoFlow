@@ -1,41 +1,47 @@
-import matplotlib.pyplot as plt
-from matplotlib.ticker import PercentFormatter
-import seaborn as sns
-import pandas as pd
-import numpy as np
-import networkx as nx
+"""Plotting and network-export helpers.
+
+Every function writes its figure/network to the **current working directory**
+by concatenating ``filename_prefix`` with a fixed suffix (for example
+``<prefix>optimization_values.png`` or ``<prefix>network.graphml``). The CLI
+passes a prefix derived from the expression file name.
+"""
+
 import json
+
+import matplotlib.pyplot as plt
+import networkx as nx
+import numpy as np
+import pandas as pd
+import seaborn as sns
+from matplotlib.ticker import PercentFormatter
 
 
 def plot_optimization_history(logs, filename_prefix):
     """Plot the evolution of metrics during a GA run.
 
-    The function accepts either a :class:`pandas.DataFrame` or a
-    dictionary keyed by generation. Each entry should itself be a mapping
-    from metric name to value; tuple-valued entries will be expanded into
-    separate columns.  Typical keys include ``Flow``, ``Node``,
-    ``Redundancy`` and ``hv``, but any numeric metric present in the logs
-    will be plotted.
+    The function accepts either a :class:`pandas.DataFrame` or a dictionary
+    keyed by generation. Each entry should itself be a mapping from metric name
+    to value; tuple-valued entries will be expanded into separate columns.
+    Typical keys include ``Flow``, ``Node``, ``Redundancy`` and ``hv``, but any
+    numeric metric present in the logs will be plotted.
 
     A grid of subplots is generated automatically based on the number of
-    metrics found.  The x-axis for every subplot is the generation number
-    (``gen``); the y-axis is the metric value.  The resulting figure is
-    saved with the suffix ``optimization_values.png`` appended to
-    ``filename_prefix``.
+    metrics found. The x-axis for every subplot is the generation number
+    (``gen``); the y-axis is the metric value. The resulting figure is saved as
+    ``<filename_prefix>optimization_values.png``.
 
-    Parameters
-    ----------
-    logs : dict or pandas.DataFrame
-        Optimization history.  If a dict, keys should be generation numbers
-        and values metric dictionaries.  If a DataFrame, a ``gen`` column
-        should exist or will be inferred from the index.
-    filename_prefix : str
-        Prefix used when saving the figure.
+    Args:
+        logs (dict or pandas.DataFrame): Optimization history. If a dict, keys
+            should be generation numbers and values metric dictionaries. If a
+            DataFrame, a ``gen`` column should exist or will be inferred from
+            the index.
+        filename_prefix (str): Prefix used when saving the figure.
 
-    Returns
-    -------
-    matplotlib.figure.Figure
-        The figure object that was created (also saved to disk).
+    Returns:
+        matplotlib.figure.Figure: The created figure (also saved to disk).
+
+    Raises:
+        ValueError: If the logs contain no plottable metrics.
     """
 
     # --- normalize input to DataFrame ---
@@ -115,8 +121,13 @@ def plot_optimization_history(logs, filename_prefix):
 
 
 def plot_node_proportions(annotation, filename_prefix):
-    """
-    Plots the proportion of node types.
+    """Plot the proportion of each node type.
+
+    Args:
+        annotation (pandas.Series): Gene -> annotation table produced by
+            :class:`EvoFlow.biology.BioNetworkPreparer`.
+        filename_prefix (str): Prefix used when saving the figure; the output is
+            ``<filename_prefix>nodes_proportions.png``.
     """
     annotation_prop = annotation.value_counts() / (annotation.value_counts().sum())
 
@@ -145,22 +156,21 @@ def plot_node_attribute(
     show: bool = True,
     save: bool = True,
 ):
-    """
-    Plots node attribute rank and distribution.
+    """Plot the rank distribution and histogram of a node attribute.
 
-    Parameters:
-    -----------
-    G : nx.DiGraph
-        The network graph containing nodes with attributes.
-    filename_prefix : str
-        Prefix for saving the figure.
-    attribute : str, default 'percolation'
-        The node attribute to plot (e.g., 'percolation', 'capacity').
+    Args:
+        G (networkx.DiGraph): Graph whose nodes carry ``attribute``.
+        filename_prefix (str): Prefix for the saved figure; the output is
+            ``<filename_prefix><attribute>.png``.
+        attribute (str): Node attribute to plot (e.g. ``"percolation"``).
+            Defaults to ``"percolation"``.
+        show (bool): Whether to display the figure interactively. Defaults to
+            ``True``.
+        save (bool): Whether to write the figure to disk. Defaults to ``True``.
 
     Raises:
-    -------
-    ValueError
-        If the specified attribute does not exist or contains non-numeric values.
+        ValueError: If ``attribute`` is missing from a node, is non-numeric, or
+            has no finite values.
     """
     # Extract attribute values from nodes
     attribute_values = []
@@ -224,8 +234,13 @@ def plot_node_attribute(
 
 
 def save_network(G, filename_prefix):
-    """
-    Saves the network in Cytoscape JSON and GraphML formats.
+    """Save the network as Cytoscape JSON and GraphML.
+
+    Args:
+        G (networkx.DiGraph): Graph to export.
+        filename_prefix (str): Prefix for the output files;
+            ``<prefix>network.cyjs`` and ``<prefix>network.graphml`` are written
+            to the current working directory.
     """
     # Cytoscape JSON
     cs = nx.cytoscape_data(G)
@@ -239,32 +254,26 @@ def save_network(G, filename_prefix):
 
 
 def plot_graph(G, filename_prefix=None, layout="kamada_kawai", figsize=(15, 12)):
-    """
-    Plots the network graph with nodes colored by their type.
+    """Plot the network with nodes colored by type.
 
-    Parameters:
-    -----------
-    G : nx.DiGraph
-        The network graph to plot.
-    filename_prefix : str, optional
-        Prefix for saving the figure. If None, plot is not saved.
-    layout : str, default "kamada_kawai"
-        Layout algorithm to use. Options include:
-        - "kamada_kawai": Kamada-Kawai layout (default)
-        - "spring": Spring layout (Fruchterman-Reingold)
-        - "circular": Circular layout
-        - "shell": Shell layout
-        - "spectral": Spectral layout
-        - "spiral": Spiral layout
-    figsize : tuple, default (15, 12)
-        Figure size (width, height) in inches.
+    Args:
+        G (networkx.DiGraph): Graph to draw. Node colors come from the
+            ``node_type`` node attribute (``"unknown"`` when absent).
+        filename_prefix (str, optional): Prefix for the saved figure; output is
+            ``<prefix>network_plot_<layout>.png``. If ``None`` the figure is not
+            written to disk.
+        layout (str): Layout algorithm, one of ``"kamada_kawai"`` (default),
+            ``"spring"``, ``"circular"``, ``"shell"``, ``"spectral"`` or
+            ``"spiral"``.
+        figsize (tuple): Figure size ``(width, height)`` in inches. Defaults to
+            ``(15, 12)``.
 
     Returns:
-    --------
-    fig : matplotlib.figure.Figure
-        The matplotlib figure object.
-    ax : matplotlib.axes.Axes
-        The matplotlib axes object.
+        tuple[matplotlib.figure.Figure, matplotlib.axes.Axes]: The figure and
+        axes objects.
+
+    Raises:
+        ValueError: If ``layout`` is not one of the supported algorithms.
     """
     # Define layout algorithms
     layout_functions = {
@@ -293,7 +302,7 @@ def plot_graph(G, filename_prefix=None, layout="kamada_kawai", figsize=(15, 12))
         node_types[node_type].append(node)
 
     # Define a color palette for node types
-    colors_palette = plt.cm.get_cmap("tab10")
+    colors_palette = plt.get_cmap("tab10")
     color_map = {}
     for idx, node_type in enumerate(sorted(node_types.keys())):
         color_map[node_type] = colors_palette(idx % 10)
@@ -349,26 +358,24 @@ def plot_graph(G, filename_prefix=None, layout="kamada_kawai", figsize=(15, 12))
 def plot_edge_attribute(
     G, filename_prefix, attribute: str = "weight", show: bool = True, save: bool = True
 ):
-    """
-    Plots edge attribute rank and distribution.
+    """Plot the rank distribution and histogram of an edge attribute.
 
-    Parameters:
-    -----------
-    G : nx.DiGraph
-        The network graph containing edges with attributes.
-    filename_prefix : str
-        Prefix for saving the figure.
-    attribute : str, default 'weight'
-        The edge attribute to plot (e.g., 'weight', 'capacity').
-    show : bool, default True
-        Whether to display the plot.
-    save : bool, default True
-        Whether to save the plot to a file.
+    Non-finite values (infinite capacities on super-node edges) are skipped so
+    they do not dominate the histogram.
+
+    Args:
+        G (networkx.DiGraph): Graph whose edges carry ``attribute``.
+        filename_prefix (str): Prefix for the saved figure; the output is
+            ``<filename_prefix>edge_<attribute>.png``.
+        attribute (str): Edge attribute to plot (e.g. ``"weight"`` or
+            ``"capacity"``). Defaults to ``"weight"``.
+        show (bool): Whether to display the figure interactively. Defaults to
+            ``True``.
+        save (bool): Whether to write the figure to disk. Defaults to ``True``.
 
     Raises:
-    -------
-    ValueError
-        If the specified attribute does not exist or contains non-numeric values.
+        ValueError: If ``attribute`` is missing from an edge, is non-numeric, or
+            has no finite values.
     """
     # Extract attribute values from edges
     attribute_values = []

@@ -1,23 +1,51 @@
+"""Flow-topology preparation: add SuperSource, SuperSink and dummy nodes.
+
+The dummy nodes decouple the biological source/sink genes from the artificial
+super nodes so that the genetic algorithm can remove edges incident to a
+receptor or target without disconnecting the whole network.
+"""
+
 import numpy as np
 
 
 def prepare_flow_topology(G, source_nodes, sink_nodes, lock_targets: int = 0):
     """
-    General function to prepare a graph for flow analysis by adding SuperSource, SuperSink, and dummy nodes.
+    Prepare a graph for flow analysis by adding SuperSource, SuperSink, and dummy nodes.
+
+    The graph ``G`` is modified in place: a ``SuperSource`` is connected to each
+    source node through a ``dummy_<node>`` intermediary, and each sink node is
+    connected to ``SuperSink`` through its own ``dummy_<node>``. Dummy edges use
+    the mean capacity of the existing edges; super-node edges are infinite.
 
     Args:
-        G (nx.DiGraph): The graph to modify.
-        source_nodes (list): List of node names to treat as sources (will connect to SuperSource via dummies).
-        sink_nodes (list): List of node names to treat as sinks (will connect to SuperSink via dummies).
-        lock_targets (int): Bitmask controlling which original nodes are locked into sources/sinks.
-            0 (default): No locking — only SuperSource/dummy sources and dummy sinks/SuperSink are returned.
-            1: Original source_nodes are added to final_sources (cannot be removed by GA).
-            2: Original sink_nodes are added to final_sinks (cannot be removed by GA).
-            3: Both source_nodes and sink_nodes are locked.
+        G (networkx.DiGraph): The graph to modify in place.
+        source_nodes (list): Node names to treat as sources.
+        sink_nodes (list): Node names to treat as sinks. Nodes missing from
+            ``G`` are silently skipped.
+        lock_targets (int): Bitmask controlling which original nodes are locked
+            into the returned source/sink sets (and therefore protected from
+            removal by the GA).
+            0 (default): No locking.
+            1: ``source_nodes`` are added to ``final_sources``.
+            2: ``sink_nodes`` are added to ``final_sinks``.
+            3: Both are locked.
 
     Returns:
-        tuple: (final_sources, final_sinks) where final_sources includes SuperSource and dummy sources,
-               and final_sinks includes dummy sinks and SuperSink.
+        tuple[list, list]: ``(final_sources, final_sinks)`` where
+        ``final_sources`` includes ``"SuperSource"`` plus the dummy sources and
+        ``final_sinks`` includes the dummy sinks plus ``"SuperSink"``.
+
+    Raises:
+        ValueError: If ``lock_targets`` is not one of ``0, 1, 2, 3``.
+
+    Examples:
+        >>> import networkx as nx
+        >>> from EvoFlow.preparer import prepare_flow_topology
+        >>> G = nx.DiGraph()
+        >>> G.add_edge("L", "R", capacity=1.0)
+        >>> sources, sinks = prepare_flow_topology(G, ["R"], ["T"])
+        >>> "SuperSource" in sources
+        True
     """
     if lock_targets not in (0, 1, 2, 3):
         raise ValueError(f"lock_targets must be 0, 1, 2, or 3, got {lock_targets}")

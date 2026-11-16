@@ -33,6 +33,20 @@ _TERM_BUILDERS = {
 
 
 class GAM:
+    """Thin wrapper around a :class:`pygam.LinearGAM`.
+
+    Handles config loading (from the packaged ``EvoFlow/models/config.yaml`` by
+    default), training-data preprocessing, cross-validated training,
+    persistence and prediction/ranking of GA hyper-parameter combinations.
+
+    Attributes:
+        features (list[str]): Feature names in the order expected by the model.
+        y_col (str): Name of the target column.
+        data_path (pathlib.Path | None): Training data path from the config.
+        model_path (pathlib.Path | None): Model path for user-supplied configs;
+            ``None`` when the packaged model is used.
+    """
+
     def __init__(self, config_path: str | Path = None):
         """Create a `GAM` wrapper from a YAML config file.
 
@@ -188,18 +202,22 @@ class GAM:
         return self._model
 
     def load_data(self):
-        """Load and preprocess data from `data_path`.
+        """Load and preprocess data from ``self.data_path``.
 
-        This uses the project's `Preprocessing` helper to apply
-        column fixes and return a cleaned `DataFrame` containing the
+        Uses :class:`EvoFlow.gam_preprocessing.Preprocessing` to apply the
+        configured column fixes and return a cleaned dataframe containing the
         feature columns and the target column.
 
-        Args:
-            data_path: Path to the CSV or supported input file.
-
         Returns:
-            A pandas `DataFrame` ready for training.
+            pandas.DataFrame: Data ready for training.
+
+        Raises:
+            RuntimeError: If the config does not define a training data path.
         """
+        if self.data_path is None:
+            raise RuntimeError(
+                "GAM config does not define 'training_data'; cannot load data."
+            )
         preprocesser = Preprocessing(
             inputh_path=self.data_path, columns=self.features + [self.y_col]
         )
@@ -324,11 +342,13 @@ class GAM:
         return gam, scores
 
     def save_model(self, scores: pd.DataFrame):
-        """Save the trained `gam` and associated `scores` to disk.
+        """Save the trained model and associated CV scores to disk.
+
+        The model stored in ``self._model`` and ``scores`` are pickled together
+        as ``{"model": ..., "scores": ...}``.
 
         Args:
-            gam: Trained `LinearGAM` instance.
-            scores: DataFrame with CV scores to persist alongside.
+            scores (pandas.DataFrame): CV scores to persist alongside the model.
         """
         model_data = {"model": self._model, "scores": scores}
 
@@ -340,18 +360,21 @@ class GAM:
             pickle.dump(model_data, f)
 
     def predict(self, df: pd.DataFrame):
-        """Predict scores for rows in `df` using `gam`.
+        """Predict scores for rows in ``df`` with the loaded model.
 
-        Validates that `df` contains the expected feature columns in the
-        configured order, computes the predictions in transformed space
-        and converts them back to the original score space.
+        Validates that ``df`` contains the expected feature columns, computes
+        predictions in transformed space and converts them back to the original
+        score space.
 
         Args:
-            gam: Trained `LinearGAM` instance.
-            df: DataFrame containing feature columns.
+            df (pandas.DataFrame): Dataframe containing the feature columns.
 
         Returns:
-            Numpy array of predicted scores in original scale.
+            numpy.ndarray: Predicted scores in the original (untransformed)
+            scale.
+
+        Raises:
+            ValueError: If any expected feature column is missing.
         """
 
         if self._model is None:

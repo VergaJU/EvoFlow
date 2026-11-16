@@ -1,20 +1,37 @@
+"""Flow computation and the multi-objective genetic algorithm.
+
+The graph is converted once to an ``int32`` CSR capacity matrix
+(``scipy.sparse.csgraph.maximum_flow``); workers receive that matrix through
+:func:`_init_worker` and evaluate individuals by zeroing the rows/columns of
+removed nodes. Top-level functions must stay picklable for multiprocessing.
+
+Objectives minimised by the GA are, in order:
+
+1. maximum flow from source to sink,
+2. number of removed nodes,
+3. SCC redundancy (co-occurrence of removed nodes in strongly connected
+   components).
+"""
+
+import functools
+import json
+import math
+import multiprocessing
+import os
 import random
 import time
-import networkx as nx
-import multiprocessing
 from array import array
+
+import networkx as nx
+import numpy as np
+import pandas as pd
 from deap import base, creator, tools
 from deap.benchmarks.tools import hypervolume
-import numpy as np
+from scipy.sparse.csgraph import connected_components, maximum_flow
 from scipy.spatial.distance import pdist
-import pandas as pd
+
 from EvoFlow.features_extraction import NetworkFeatures
 from EvoFlow.model import GAM
-import math
-import functools
-import os
-import json
-from scipy.sparse.csgraph import maximum_flow, connected_components
 
 
 _worker_csr = None
@@ -25,6 +42,18 @@ _worker_sink_idx = None
 
 
 def _init_worker(csr, removable_csr_indices, source_idx, sink_idx, node_to_idx):
+    """Initialise module globals in a multiprocessing worker.
+
+    The (potentially large) CSR matrix is shipped once per worker instead of
+    with every task.
+
+    Args:
+        csr (scipy.sparse.csr_matrix): Scaled integer capacity matrix.
+        removable_csr_indices (numpy.ndarray): CSR indices of removable nodes.
+        source_idx (int): CSR index of the source.
+        sink_idx (int): CSR index of the sink.
+        node_to_idx (dict): Node name -> CSR index mapping.
+    """
     global \
         _worker_csr, \
         _worker_removable_csr_indices, \
@@ -42,8 +71,17 @@ def _init_worker(csr, removable_csr_indices, source_idx, sink_idx, node_to_idx):
 
 
 def extract_active_subgraph(G, source="SuperSource", sink="SuperSink"):
-    """
-    Extracts the subgraph containing all paths between source and sink.
+    """Extract the subgraph containing all paths between source and sink.
+
+    Args:
+        G (networkx.DiGraph): Graph with the super nodes.
+        source (str): Source node name. Defaults to ``"SuperSource"``.
+        sink (str): Sink node name. Defaults to ``"SuperSink"``.
+
+    Returns:
+        networkx.DiGraph: Copy of the subgraph induced by the nodes reachable
+        from ``source`` that can also reach ``sink`` (plus both super nodes).
+        An empty graph is returned when either super node is missing.
     """
     if source not in G or sink not in G:
         print(f"Source {source} or Sink {sink} not in graph")
@@ -62,9 +100,18 @@ def extract_active_subgraph(G, source="SuperSource", sink="SuperSink"):
 
 
 def generate_individual(icls, removable_nodes, max_remove=3):
-    """
-    Generates a random individual (binary mask).
-    1 = Keep Node, 0 = Remove Node.
+    """Generate a random individual as a binary mask.
+
+    ``1`` means keep the node and ``0`` means remove it. The number of removed
+    nodes is drawn uniformly from ``1..max_remove``.
+
+    Args:
+        icls (type): Individual class registered with DEAP (``creator.Individual``).
+        removable_nodes (list): Nodes the mask indexes.
+        max_remove (int): Maximum number of nodes to remove. Defaults to ``3``.
+
+    Returns:
+        deap.creator.Individual: Binary individual.
     """
     ind = [1] * len(removable_nodes)
     n_remove = min(random.randint(1, max_remove), len(removable_nodes))
@@ -76,8 +123,19 @@ def generate_individual(icls, removable_nodes, max_remove=3):
 
 
 def repair_individual(ind, min_remove=2, max_remove=10):
-    """
-    Repairs an individual to stay within deletion bounds.
+    """Repair an individual so its number of removals is within bounds.
+
+    Random ``0 -> 1`` or ``1 -> 0`` flips are applied until the count of
+    removed nodes lies in ``[min_remove, max_remove]``. The fitness values are
+    invalidated when the individual is modified.
+
+    Args:
+        ind (deap.creator.Individual): Individual to repair in place.
+        min_remove (int): Minimum number of removed nodes. Defaults to ``2``.
+        max_remove (int): Maximum number of removed nodes. Defaults to ``10``.
+
+    Returns:
+        deap.creator.Individual: The repaired individual (same object).
     """
     current_removed = ind.count(0)
     modified = False
@@ -107,8 +165,15 @@ def repair_individual(ind, min_remove=2, max_remove=10):
 
 
 def mutate(individual, indpb=0.05):
-    """
-    Wrapper for shuffle mutation that includes cleanup.
+    """Flip each bit of an individual with probability ``indpb``.
+
+    Args:
+        individual (deap.creator.Individual): Individual to mutate in place.
+        indpb (float): Per-bit flip probability. Defaults to ``0.05``.
+
+    Returns:
+        tuple: One-element tuple containing the mutated individual, as
+        required by DEAP.
     """
     tools.mutFlipBit(individual, indpb)
     # cleanup_individual(individual, min_remove, max_remove)
@@ -119,6 +184,15 @@ def mutate(individual, indpb=0.05):
 
 
 def get_nodes(removable_nodes, individual):
+    """Map a binary individual back to the list of removed node names.
+
+    Args:
+        removable_nodes (list): Nodes indexed by the individual.
+        individual (Sequence[int]): Binary mask where ``0`` means removed.
+
+    Returns:
+        list: Names of the removed nodes.
+    """
     return [node for i, node in enumerate(removable_nodes) if individual[i] == 0]
 
 
@@ -126,6 +200,16 @@ def get_nodes(removable_nodes, individual):
 
 
 def mask_csr(individual):
+    """Zero out the rows and columns of removed nodes in the worker CSR matrix.
+
+    Args:
+        individual (Sequence[int]): Binary mask where ``0`` means removed.
+
+    Returns:
+        tuple: ``(csr_masked, removed_mask)`` where ``csr_masked`` is a copy of
+        the worker capacity matrix with removed nodes disconnected and
+        ``removed_mask`` is the boolean removal mask.
+    """
     removed_mask = ~np.array(individual, dtype=bool)
     removed_csr_idx = _worker_removable_csr_indices[removed_mask]
 
@@ -138,14 +222,22 @@ def mask_csr(individual):
 
 def scipy_to_flow_dict_active(flow_matrix, csr_masked):
     """
-    Converts MaximumFlowResult.flow to a dict of only REAL, active
-    (positive) flows on edges that exist in the original capacity
-    matrix -- matching nx.maximum_flow's semantics.
+    Convert ``MaximumFlowResult.flow`` to a dict of active flows on real edges.
 
-    flow_matrix includes scipy's internally-added reverse/residual
-    edges (with zero or negative bookkeeping values); these must be
-    filtered out using the original capacity structure, not inferred
-    from flow_matrix's own sparsity pattern.
+    The result contains only positive flows on edges that exist in the
+    original capacity matrix, matching ``networkx.maximum_flow`` semantics.
+
+    ``flow_matrix`` includes scipy's internally added reverse/residual edges
+    (with zero or negative bookkeeping values); these are filtered out using
+    the original capacity structure, not the flow matrix's own sparsity.
+
+    Args:
+        flow_matrix (scipy.sparse.spmatrix): Flow values returned by
+            ``scipy.sparse.csgraph.maximum_flow`` (already divided by ``scale``).
+        csr_masked (scipy.sparse.csr_matrix): Masked capacity matrix.
+
+    Returns:
+        dict: ``{u: {v: flow}}`` mapping for every real edge with positive flow.
     """
     # Binary mask of the ORIGINAL (real) edges only
     real_edge_mask = csr_masked.copy()
@@ -177,8 +269,16 @@ def scipy_to_flow_dict_active(flow_matrix, csr_masked):
 
 
 def calculate_flow_capacity(csr_masked, scale):
-    """
-    Calculates max flow capacity between source and sink.
+    """Compute the maximum flow between the worker source and sink.
+
+    Args:
+        csr_masked (scipy.sparse.csr_matrix): Masked integer capacity matrix.
+        scale (int): Integer scaling factor used when the matrix was built.
+
+    Returns:
+        tuple[float, dict]: ``(flow_value, flow_dict)`` where ``flow_value`` is
+        rescaled back to the original capacity units and ``flow_dict`` is the
+        per-edge flow mapping.
     """
     res = maximum_flow(csr_masked, _worker_source_idx, _worker_sink_idx)
     flow_value = res.flow_value / scale
@@ -189,6 +289,15 @@ def calculate_flow_capacity(csr_masked, scale):
 
 
 def scc_redundancy(csr_masked):
+    """Measure redundancy as the sum of squared sizes of multi-node SCCs.
+
+    Args:
+        csr_masked (scipy.sparse.csr_matrix): Masked capacity matrix.
+
+    Returns:
+        int: ``sum(size ** 2)`` over strongly connected components with more
+        than one node (``0`` when no redundant components remain).
+    """
     # SCC redundancy (reuse same masked matrix — same trick as before)
     n_components, labels = connected_components(
         csr_masked, directed=True, connection="strong"
@@ -199,12 +308,23 @@ def scc_redundancy(csr_masked):
 
 
 def evaluate(individual, scale, max_remove, constrained):
-    """
-    Fitness Function.
-    Objectives (minimized):
-    1. Flow Value (Max Flow)
-    2. Number of Removed Nodes
-    3. Co-occurrence in SCCs
+    """Fitness function for the GA (must be top-level for multiprocessing).
+
+    Objectives, all minimised:
+
+    1. maximum flow value,
+    2. number of removed nodes,
+    3. SCC co-occurrence (redundancy).
+
+    Args:
+        individual (Sequence[int]): Binary removal mask.
+        scale (int): Integer scaling factor of the capacity matrix.
+        max_remove (int): Maximum allowed number of removals.
+        constrained (bool): When true, individuals above ``max_remove`` receive
+            a large squared penalty instead of being evaluated.
+
+    Returns:
+        tuple: ``(fitness_tuple, {})`` as expected by DEAP's ``map``.
     """
     csr_masked, removed_mask = mask_csr(individual)
 
@@ -225,6 +345,15 @@ def evaluate(individual, scale, max_remove, constrained):
 
 
 def genotypic_diversity(population):
+    """Mean pairwise Hamming distance of the population.
+
+    Args:
+        population (list): DEAP individuals (binary masks).
+
+    Returns:
+        float: Mean genotypic diversity, or ``0.0`` for populations with fewer
+        than two individuals.
+    """
     if len(population) < 2:
         return 0.0
     pop_array = np.array(population, dtype=int)
@@ -237,6 +366,15 @@ def genotypic_diversity(population):
 
 
 def collapse_pop(population):
+    """Collapse a population to the set of nodes removed by *every* individual.
+
+    Args:
+        population (list): DEAP individuals (binary masks).
+
+    Returns:
+        numpy.ndarray: Binary mask that is ``1`` only where all individuals
+        kept the node.
+    """
     pop_array = np.array(population, dtype=int)
     # Collapse: Result is 1 only if ALL are 1. If any are 0, result is 0.
     collapsed = np.all(pop_array, axis=0).astype(int)
@@ -247,6 +385,22 @@ def collapse_pop(population):
 
 
 def select_candidates(population, removable_nodes):
+    """Pick the four reported solutions from the Pareto front.
+
+    The front is normalised per objective and the balanced solution is the one
+    closest to the origin; the remaining three minimise flow, cost and
+    redundancy individually.
+
+    Args:
+        population (list): DEAP individuals with valid fitness values.
+        removable_nodes (list): Nodes indexed by the individuals.
+
+    Returns:
+        tuple[dict, numpy.ndarray]: ``(results, norm)`` where ``results`` maps
+        ``Best_balanced``, ``Best_Flow``, ``Best_Cost`` and ``Best_Redundancy``
+        to dicts with ``fitness``, ``num_removed`` and ``removed_nodes``, and
+        ``norm`` is the normalized front used for the TSV export.
+    """
     front = tools.sortNondominated(population, len(population), first_front_only=True)[
         0
     ]
@@ -300,7 +454,18 @@ def select_candidates(population, removable_nodes):
 
 
 def select_for_diversification(population, n):
-    """Select individuals with LOWEST crowding distance — most crowded = least diverse."""
+    """Select the most crowded individuals of the first Pareto front.
+
+    Lowest crowding distance means least diverse; these individuals are the
+    ones mutated when the run stagnates.
+
+    Args:
+        population (list): DEAP individuals with crowding distances assigned.
+        n (int): Number of individuals to return.
+
+    Returns:
+        list: The ``n`` individuals with the smallest crowding distance.
+    """
     front = tools.sortNondominated(population, len(population), first_front_only=True)[
         0
     ]
@@ -313,10 +478,23 @@ def select_for_diversification(population, n):
 
 
 def build_scaled_capacities(G, scale):
-    """
-    Returns (G_scaled, scale, sentinel_int) with capacities converted to
-    safe int32-range integers. np.inf edges get an explicit finite
-    sentinel, never a raw cast of infinity.
+    """Convert capacities to safe ``int32`` integers for scipy's max-flow.
+
+    Infinite capacities (super-node edges) get an explicit finite sentinel
+    value rather than a raw cast of infinity.
+
+    Args:
+        G (networkx.DiGraph): Graph with a ``capacity`` edge attribute.
+        scale (int): Multiplicative factor applied before rounding.
+
+    Returns:
+        tuple[networkx.DiGraph, int]: ``(G_scaled, sentinel)`` where
+        ``G_scaled`` is a copy with integer capacities and ``sentinel`` is the
+        value assigned to formerly infinite capacities.
+
+    Raises:
+        ValueError: If ``scale`` pushes the largest finite capacity too close
+            to the ``int32`` limit.
     """
     finite_caps = [
         d.get("capacity", 1.0)
@@ -359,13 +537,24 @@ def build_scaled_capacities(G, scale):
 
 class DiskLogger:
     """
-    Streams per-generation records to a JSONL file instead of keeping
-    them in memory. `visited_nodes` is stored as a diff (newly-visited
-    nodes only) because the set only ever grows across generations —
-    storing the full list every generation is O(N) per gen for no reason.
+    Streams per-generation records to a JSONL file instead of keeping them in memory.
+
+    ``visited_nodes`` is stored as a diff (newly visited nodes only) because the
+    set only ever grows across generations — storing the full list every
+    generation would be O(N) per generation for no benefit.
+
+    Attributes:
+        log_path (str | pathlib.Path): Destination JSONL file.
     """
 
     def __init__(self, log_path, flush_every=10):
+        """Open the log file for writing.
+
+        Args:
+            log_path (str | pathlib.Path): Destination JSONL file (truncated).
+            flush_every (int): Number of records between explicit flushes.
+                Defaults to ``10``.
+        """
         self.log_path = log_path
         self.flush_every = flush_every
         self._fh = open(log_path, "w", buffering=1)  # line-buffered
@@ -386,6 +575,13 @@ class DiskLogger:
         return obj
 
     def log_generation(self, gen, record):
+        """Append one generation record to the log file.
+
+        Args:
+            gen (int): Generation number.
+            record (dict): Metrics for the generation. ``visited_nodes`` is
+                rewritten as a diff against the previous record.
+        """
         record = dict(record)  # don't mutate caller's dict
 
         if "visited_nodes" in record:
@@ -405,6 +601,7 @@ class DiskLogger:
             self._n_since_flush = 0
 
     def close(self):
+        """Flush and close the underlying log file."""
         self._fh.flush()
         os.fsync(self._fh.fileno())
         self._fh.close()
@@ -412,9 +609,17 @@ class DiskLogger:
 
 def load_logs(log_path):
     """
-    Reconstructs the full {gen: record} dict from a JSONL log file,
-    re-expanding visited_nodes from cumulative diffs. Use this after
-    the run, for analysis/plotting — not during the run.
+    Reconstruct the full ``{gen: record}`` dict from a JSONL log file.
+
+    ``visited_nodes`` is re-expanded from the cumulative diffs written by
+    :class:`DiskLogger`. Use this after the run for analysis/plotting, not
+    during it.
+
+    Args:
+        log_path (str | pathlib.Path): JSONL file written during a run.
+
+    Returns:
+        dict: Mapping ``generation -> record``.
     """
     logs = {}
     cumulative = set()
@@ -433,6 +638,15 @@ def load_logs(log_path):
 
 
 class AdaptiveRates:
+    """Mutation/crossover rates that decay and periodically reheat.
+
+    Rates decay geometrically toward their minima while the run is improving.
+    Once a minimum is reached and the run has stagnated for
+    ``stagnation_trigger`` generations, the rates are heated back toward their
+    base values, with each reheating spike attenuated by
+    ``reheat_attenuation``.
+    """
+
     def __init__(
         self,
         base_cxpb,
@@ -448,6 +662,27 @@ class AdaptiveRates:
         stagnation_trigger=3,
         reheat_attenuation=0.9,
     ):  # <--- New: how much the "spike" weakens each time
+        """Initialise the rates.
+
+        Args:
+            base_cxpb (float): Starting (and peak) crossover probability.
+            base_mtpb (float): Starting (and peak) mutation probability.
+            base_indpb (float): Starting per-bit mutation probability.
+            min_cxpb (float): Lower bound for crossover. Defaults to ``0.5``.
+            min_mtpb (float): Lower bound for mutation. Defaults to ``0.1``.
+            min_indpb (float, optional): Lower bound for per-bit mutation.
+                Defaults to half of ``base_indpb``.
+            max_cxpb (float): Upper bound for crossover. Defaults to ``0.95``.
+            max_mtpb (float): Upper bound for mutation. Defaults to ``0.8``.
+            max_indpb (float, optional): Upper bound for per-bit mutation.
+                Defaults to ``min(5 * base_indpb, 0.5)``.
+            decay (float): Per-generation multiplicative decay. Defaults to
+                ``0.997``.
+            stagnation_trigger (int): Generations without improvement before
+                reheating. Defaults to ``3``.
+            reheat_attenuation (float): Factor applied to the spike height at
+                each reheating. Defaults to ``0.9``.
+        """
         self.base_cxpb = base_cxpb
         self.base_mtpb = base_mtpb
         self.base_indpb = base_indpb
@@ -474,6 +709,12 @@ class AdaptiveRates:
         self.burst_active = False
 
     def step(self, generations_without_improvement):
+        """Advance the rates by one generation.
+
+        Args:
+            generations_without_improvement (int): Number of consecutive
+                generations without fitness improvement.
+        """
         at_minimum = (
             abs(self.cxpb - self.min_cxpb) < 1e-4
             and abs(self.mtpb - self.min_mtpb) < 1e-4
@@ -492,8 +733,10 @@ class AdaptiveRates:
 
     def reheat(self):
         """
-        Implementation of Adaptive Reheating:
-        Every time we reheat, the peak is lower than the previous peak.
+        Raise the rates toward their base values with an attenuated spike.
+
+        Every reheating produces a lower peak than the previous one, keeping the
+        rates above their minima while gradually reducing exploration.
         """
         # 1. Lower the 'energy' for this next cycle
         self.current_reheat_factor *= self.reheat_attenuation
@@ -516,7 +759,17 @@ class AdaptiveRates:
 
 # --- MockIndividual to normalize front ---
 class MockIndividual:
+    """Stand-in individual exposing only a ``fitness.values`` attribute.
+
+    Used to reuse the Pareto-normalisation code on plain fitness vectors.
+    """
+
     def __init__(self, values):
+        """Wrap a fitness tuple.
+
+        Args:
+            values (tuple): Fitness values to expose as ``self.fitness.values``.
+        """
         # We create a fake fitness object with a values attribute
         self.fitness = type("Fitness", (), {"values": values})
 
@@ -530,6 +783,16 @@ class SmartCacheMap:
     """
 
     def __init__(self, evaluation_func, cache=None, pool=None):
+        """Wrap an evaluation function with a main-process cache.
+
+        Args:
+            evaluation_func (callable): Function mapping an individual to
+                ``(fitness_tuple, flow_dict)``.
+            cache (dict, optional): Cache shared across calls. A new dict is
+                created when omitted.
+            pool (multiprocessing.pool.Pool, optional): Worker pool used for
+                cache misses. When ``None``, evaluation runs sequentially.
+        """
         self.evaluation_func = evaluation_func
         self.cache = cache if cache is not None else {}
         self.pool = pool
@@ -583,6 +846,30 @@ class SmartCacheMap:
 
 
 class GAOptimizer:
+    """Multi-objective genetic algorithm over node-removal sets.
+
+    The active subgraph (all paths between ``SuperSource`` and ``SuperSink``) is
+    converted once to an integer CSR capacity matrix. Individuals are binary
+    masks over the removable nodes and are evaluated with
+    :func:`evaluate`; results are cached by :class:`SmartCacheMap`.
+
+    Attributes:
+        G (networkx.DiGraph): Input graph.
+        SG (networkx.DiGraph): Active subgraph the GA actually optimises.
+        sources (list): Source nodes (protected from removal).
+        sinks (list): Sink nodes (protected from removal).
+        removable_nodes (list): Nodes the GA may remove.
+        N (int): Number of removable nodes.
+        node_order (list): Node order defining the CSR index space.
+        csr (scipy.sparse.csr_matrix): Scaled integer capacity matrix.
+        base_flow (float): Maximum flow before any removal, used for
+            normalisation.
+        population_size (int): Population size used by the last
+            :meth:`run` call.
+        early_stop_gen (int): Early-stopping patience used by the last
+            :meth:`run` call.
+    """
+
     def __init__(
         self,
         G,
@@ -603,6 +890,39 @@ class GAOptimizer:
         scale=1000,
         **kwargs,
     ):
+        """Prepare the graph, DEAP toolbox and evaluation machinery.
+
+        Args:
+            G (networkx.DiGraph): Graph prepared with
+                :func:`EvoFlow.preparer.prepare_flow_topology`.
+            sources (list): Source nodes; never removed.
+            sinks (list): Sink nodes; never removed.
+            max_remove (int): Maximum removals per individual. Defaults to
+                ``10``.
+            min_remove (int): Minimum removals per individual. Defaults to
+                ``1``.
+            delta_penalty (bool): Apply the over-budget penalty during
+                evaluation. Defaults to ``False``.
+            repair (bool): Repair individuals to respect the removal bounds.
+                Defaults to ``False``.
+            norm_hypervolume (bool): Normalise the hypervolume reference.
+                Defaults to ``False``.
+            dynamic (bool): Use adaptive crossover/mutation rates. Requires
+                ``repair=True`` to keep individuals valid. Defaults to
+                ``False``.
+            base_cxpb (float): Initial crossover probability. Defaults to
+                ``0.75``.
+            base_mtpb (float): Initial mutation probability. Defaults to
+                ``0.9``.
+            base_indpb (int): Per-bit mutation percentage used to derive the
+                per-bit probability. Defaults to ``5``.
+            use_multiprocessing (bool): Evaluate in a process pool. Defaults to
+                ``True``.
+            verbose (bool): Print progress messages. Defaults to ``False``.
+            n_jobs (int, optional): Worker count. ``None`` uses all CPUs.
+            scale (int): Integer capacity scaling. Defaults to ``1000``.
+            **kwargs: Accepted for backwards compatibility and ignored.
+        """
         self.G = G
         self.SG = extract_active_subgraph(G)
         self.sources = sources
@@ -741,8 +1061,15 @@ class GAOptimizer:
         return multiprocessing.cpu_count()
 
     def guess_parameters_gam(self):
-        """
-        guess fatures using GAM model
+        """Predict GA hyper-parameters with the bundled GAM model.
+
+        Extracts the four network features with
+        :class:`~EvoFlow.features_extraction.NetworkFeatures` and ranks
+        population-size/patience candidates with :class:`~EvoFlow.model.GAM`.
+
+        Returns:
+            tuple[int, int]: ``(population_size, early_stop_gen)`` rounded up to
+            the next integer.
         """
         nf = NetworkFeatures(G=self.SG, b=self.max_remove)
         features = pd.DataFrame(nf.extract_features())
@@ -762,8 +1089,38 @@ class GAOptimizer:
         log_flush_every=10,
         **kwargs,
     ):
-        """
-        Runs the Genetic Algorithm.
+        """Run the genetic algorithm.
+
+        Args:
+            population_size (int, optional): GA population size. Must be given
+                together with ``early_stop_gen``; omit both to let the GAM guess
+                them.
+            generations (int): Maximum number of generations. Defaults to
+                ``1000``.
+            early_stop_gen (int, optional): Generations without improvement
+                before stopping.
+            tol (float): Improvement tolerance for stagnation. Defaults to
+                ``1e-6``.
+            verbose (bool): Print progress messages. Defaults to ``False``.
+            guess_parameters (bool): Estimate the GA parameters with the GAM
+                when they are omitted. Defaults to ``True``.
+            log_path (str, optional): Destination JSONL log file. Defaults to
+                ``ga_run_<epoch>.jsonl`` in the current working directory.
+            log_flush_every (int): Records between explicit flushes. Defaults to
+                ``10``.
+            **kwargs: Accepted for backwards compatibility and ignored.
+
+        Returns:
+            tuple: ``(results, summary_logs, population, norm)`` where
+            ``results`` maps the four reported solutions to their fitness and
+            removed nodes, ``summary_logs`` holds per-generation metrics,
+            ``population`` is the final DEAP population and ``norm`` is the
+            normalized Pareto front.
+
+        Raises:
+            ValueError: If ``guess_parameters`` is set together with only one of
+                ``population_size``/``early_stop_gen``, or if guessing is
+                disabled while either value is missing.
         """
 
         self.verbose = verbose

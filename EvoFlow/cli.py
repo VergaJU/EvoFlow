@@ -74,8 +74,29 @@ def run_evoflow(
         **kwargs: Additional keyword arguments passed to GAOptimizer.
 
     Returns:
-        If return_results is True: (best_nodes_removed, logs, pop, norm)
-        Otherwise: filename_prefix (str)
+        If ``return_results`` is True: ``(best_nodes_removed, logs, pop, norm)``.
+        Otherwise: ``filename_prefix`` (str), or ``None`` when the network
+        preparation or subgraph extraction fails.
+
+    Raises:
+        ValueError: If ``population_size``/``early_stop_gen`` are only
+            half-specified, if ``expression_stat``/``expression_norm`` are
+            invalid, or if only one of ``label``/``celltype`` is given.
+
+    Examples:
+        >>> from EvoFlow.cli import run_evoflow
+        >>> run_evoflow(  # doctest: +SKIP
+        ...     network="network.tsv",
+        ...     annotation="annotation.tsv",
+        ...     expression_file="data.h5ad",
+        ...     receptors_raw="CD3E|CD28",
+        ...     mediators_raw="TBX21,IFNG",
+        ...     ligands_file="ligands.csv",
+        ...     targets="GZMB,PRF1",
+        ...     population_size=50,
+        ...     early_stop_gen=10,
+        ...     generations=20,
+        ... )
     """
     if (population_size is None) != (early_stop_gen is None):
         raise ValueError(
@@ -213,6 +234,11 @@ def run_evoflow(
 
 
 def main():
+    """Parse command-line arguments and run the EvoFlow pipeline.
+
+    Exposed as the ``evoflow`` console script. See the README (or the online
+    documentation) for the meaning of each flag.
+    """
     # This only runs when calling from CLI
     parser = argparse.ArgumentParser(
         description="EvoFlow: Network Analysis and GA Optimization"
