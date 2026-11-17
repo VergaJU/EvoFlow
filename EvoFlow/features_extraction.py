@@ -89,8 +89,7 @@ class NetworkFeatures:
         degrees = np.array(degrees, dtype=float)
         d_min = degrees.min()
 
-        if d_min < 1:
-            d_min = 1
+        d_min = max(d_min, 1)
 
         degrees_adjusted = degrees - d_min + 1
 

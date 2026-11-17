@@ -11,19 +11,20 @@ The implementations assume the target variable is a score in (0,1)
 and apply the transform `y -> log(1-y)` before training.
 """
 
-from pygam.pygam import LinearGAM, s, l, f
-import pandas as pd
-import numpy as np
-from typing import Any, List, Dict, Tuple
-from pathlib import Path
-from sklearn.model_selection import KFold
-from sklearn.metrics import mean_squared_error, r2_score
-import pickle
-from EvoFlow.gam_preprocessing import Preprocessing
 import itertools
-import yaml
+import pickle
 from importlib import resources
+from pathlib import Path
+from typing import Any
 
+import numpy as np
+import pandas as pd
+import yaml
+from pygam.pygam import LinearGAM, f, l, s
+from sklearn.metrics import mean_squared_error, r2_score
+from sklearn.model_selection import KFold
+
+from EvoFlow.gam_preprocessing import Preprocessing
 
 _TERM_BUILDERS = {
     "s": s,
@@ -78,7 +79,7 @@ class GAM:
             self.config_path = None
         else:
             self.config_path = Path(config_path)
-            with open(self.config_path, "r") as f:
+            with open(self.config_path) as f:
                 config = yaml.safe_load(f)
 
         for required_key in ("model_path", "y_col", "features"):
@@ -98,7 +99,7 @@ class GAM:
             self.model_path = None
 
         self.y_col: str = config["y_col"]
-        self._feature_config: List[Dict[str, Any]] = config["features"]
+        self._feature_config: list[dict[str, Any]] = config["features"]
 
         if len(self._feature_config) == 0:
             raise ValueError(f"GAM config '{self.config_path}' defines no features")
@@ -117,7 +118,7 @@ class GAM:
 
         # Ordered list of feature names, derived from the config so the
         # two can never drift apart.
-        self.features: List[str] = [entry["name"] for entry in self._feature_config]
+        self.features: list[str] = [entry["name"] for entry in self._feature_config]
 
         if "training_data" in config:
             raw_data_path = Path(config["training_data"])
@@ -128,9 +129,9 @@ class GAM:
         else:
             self.data_path = None
 
-        self._columns_mapping: List[Dict[str, Any]] = config["columns_fix_mapping"]
+        self._columns_mapping: list[dict[str, Any]] = config["columns_fix_mapping"]
 
-        self.columns_fix_mapping: List[Dict] = []
+        self.columns_fix_mapping: list[dict] = []
         for entry in self._columns_mapping:
             if "columns" not in entry or "method" not in entry:
                 raise ValueError(
@@ -247,7 +248,7 @@ class GAM:
         feature_names = [col for col in df.columns if col != self.y_col]
         return X, y, feature_names
 
-    def model(self, lams: List = None):
+    def model(self, lams: list = None):
         """Build and return a configured `LinearGAM` instance.
 
         Term types, constraints, and (optionally) per-term `lam` are
@@ -267,7 +268,7 @@ class GAM:
         for idx, entry in enumerate(self._feature_config):
             term_builder = _TERM_BUILDERS[entry["term"]]
 
-            kwargs: Dict[str, Any] = {}
+            kwargs: dict[str, Any] = {}
             if lams is not None:
                 kwargs["lam"] = lams[idx]
             elif "lam" in entry and entry["lam"] is not None:
@@ -401,8 +402,8 @@ class GAM:
     def rank(
         self,
         df: pd.DataFrame,
-        patience_range: Tuple[int] = (100, 500),
-        population_range: Tuple[int] = (50, 2000),
+        patience_range: tuple[int] = (100, 500),
+        population_range: tuple[int] = (50, 2000),
     ):
         """Search parameter grid for best `(population, patience)` pair.
 

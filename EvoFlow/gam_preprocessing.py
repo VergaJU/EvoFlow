@@ -7,7 +7,7 @@ before the data is handed to :class:`EvoFlow.model.GAM`.
 
 import os
 from pathlib import Path
-from typing import Any, Dict, List, Literal, Optional, Union
+from typing import Any, Literal
 
 import pandas as pd
 
@@ -23,7 +23,7 @@ class Preprocessing:
     def __init__(
         self,
         inputh_path: str | Path,
-        columns: List[str] = [
+        columns: list[str] = [
             "log_search_space",
             "alpha",
             "density",
@@ -76,8 +76,8 @@ class Preprocessing:
         self,
         df: pd.DataFrame,
         method: Literal["na_remove", "inplace"] = "inplace",
-        fill_value: Optional[Any] = 0,
-        subset: Optional[Union[str, List[str]]] = "alpha",
+        fill_value: Any | None = 0,
+        subset: str | list[str] | None = "alpha",
     ) -> pd.DataFrame:
         """Remove or fill missing values in the selected columns.
 
@@ -143,9 +143,9 @@ class Preprocessing:
 
     def preprocess_data(
         self,
-        columns_fix_mapping: List[Dict[str, Any]],
-        output_path: Optional[str | Path] = None,
-        save: Optional[bool] = True,
+        columns_fix_mapping: list[dict[str, Any]],
+        output_path: str | Path | None = None,
+        save: bool | None = True,
     ) -> pd.DataFrame:
         """Run the full cleaning pipeline.
 

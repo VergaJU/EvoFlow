@@ -1,8 +1,10 @@
+from unittest.mock import patch
+
+import networkx as nx
 import numpy as np
 import pandas as pd
-import networkx as nx
 import pytest
-from unittest.mock import patch
+
 from EvoFlow.biology import (
     BioNetworkPreparer,
     normalize_expression,

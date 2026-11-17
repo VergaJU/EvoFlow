@@ -33,7 +33,6 @@ from scipy.spatial.distance import pdist
 from EvoFlow.features_extraction import NetworkFeatures
 from EvoFlow.model import GAM
 
-
 _worker_csr = None
 _worker_idx_to_node = None
 _worker_removable_csr_indices = None

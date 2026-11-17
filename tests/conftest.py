@@ -1,8 +1,8 @@
-import pytest
-import pandas as pd
-import networkx as nx
-import scipy.sparse as sp
 import anndata as ad
+import networkx as nx
+import pandas as pd
+import pytest
+import scipy.sparse as sp
 
 # --- Fixtures for Biology Tests ---
 
@@ -92,7 +92,7 @@ def branching_graph():
     Structure:
        /-> A ->\
     S           T
-       \-> B ->/
+       \\-> B ->/
     """
     G = nx.DiGraph()
     G.add_nodes_from(["SuperSource", "A", "B", "SuperSink"])

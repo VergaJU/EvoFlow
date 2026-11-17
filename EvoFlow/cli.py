@@ -1,18 +1,20 @@
 import argparse
 import os
 import time
-import pandas as pd
 import warnings
+
+import pandas as pd
+
+from EvoFlow import utils
 from EvoFlow.biology import EXPRESSION_NORMS, EXPRESSION_STATS, BioNetworkPreparer
 from EvoFlow.core import GAOptimizer, extract_active_subgraph
 from EvoFlow.visualization import (
-    plot_optimization_history,
-    plot_node_proportions,
-    plot_node_attribute,
     plot_edge_attribute,
+    plot_node_attribute,
+    plot_node_proportions,
+    plot_optimization_history,
     save_network,
 )
-from EvoFlow import utils
 
 
 def run_evoflow(

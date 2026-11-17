@@ -1,18 +1,18 @@
+from array import array
 from unittest.mock import MagicMock
 
 import networkx as nx
 import numpy as np
 import pytest
-from array import array
 from deap import base, creator
 
 from EvoFlow import core
 from EvoFlow.core import (
+    GAOptimizer,
+    evaluate,
     extract_active_subgraph,
     generate_individual,
     repair_individual,
-    evaluate,
-    GAOptimizer,
 )
 
 SCALE = 1000
