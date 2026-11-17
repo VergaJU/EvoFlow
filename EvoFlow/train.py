@@ -43,14 +43,19 @@ def main() -> None:
 
     Run with ``python -m EvoFlow.train [--config PATH]``. Training data is read
     from the path declared in the config and the resulting model overwrites the
-    packaged ``model.pkl`` (or the path configured for a custom config).
+    packaged ``model.pkl`` (or the path configured for a custom config). The
+    cross-validation scores are pickled into the same file alongside the model.
+
+    Examples:
+        >>> # from the command line
+        >>> # python -m EvoFlow.train --config EvoFlow/models/config.yaml
     """
     parser = argparse.ArgumentParser(description="Train and save a GAM model")
     parser.add_argument(
         "--config",
         type=Path,
         default=Path(__file__).resolve().parent / "models/config.yaml",
-        help="Path to the configuartion file",
+        help="Path to the configuration file",
     )
     args = parser.parse_args()
 

@@ -48,5 +48,5 @@ sphinx-build -W -b html docs docs/_build/html
 ```
 
 The rendered site is written to `docs/_build/html`. Notebook outputs are
-rendered as committed (`nb_execution_mode = "off"`), so no R or Docker is
-required to build the docs.
+rendered as committed (`nb_execution_mode = "off"`), so building the docs needs
+neither NicheNet, network access nor Docker.

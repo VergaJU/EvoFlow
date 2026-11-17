@@ -34,12 +34,17 @@ Mount a host directory so notebooks and results survive the container:
 
 ```bash
 docker run --rm -p 8888:8888 \
-    -v "$PWD:/home/jovyan/work" \
+    -v "$PWD:/home/jovyan/work/host" \
     ghcr.io/vergaju/evoflow:latest
 ```
 
-The container starts in `/home/jovyan/work`, so JupyterLab opens the mounted
-directory.
+The container starts in `/home/jovyan/work`, so JupyterLab shows both the
+bundled `vignettes/` folder and your mounted `host/` folder.
+
+> Mounting over `/home/jovyan/work` itself would hide the pre-installed
+> vignettes. If you prefer that layout, copy the notebook out first:
+> `docker run --rm ghcr.io/vergaju/evoflow:latest cat
+> /home/jovyan/work/vignettes/use_case.ipynb > use_case.ipynb`.
 
 ## Open the vignette
 
@@ -52,14 +57,16 @@ The pre-installed vignette lives inside the image at:
 It is the same notebook rendered in {doc}`vignettes/index`. Run it top to
 bottom to:
 
-1. infer a signalling network with NicheNetPy,
-2. load a single-cell dataset containing NK cells with `pertpy`,
-3. run the EvoFlow genetic algorithm on the resulting network,
+1. load the `kang_2018` NK cells with `pertpy` and check the IFN-β response,
+2. infer two signalling networks with NicheNetPy — one for the IFN-β response,
+   one for the NK activation/effector program,
+3. run the EvoFlow genetic algorithm on each network,
 4. inspect and interpret the knock-out candidates.
 
 The first run downloads the NicheNet reference model from Zenodo (about
-600 MB) and `pertpy` downloads the `kang_2018` dataset (about 38 MB). Both are
-cached for subsequent runs.
+600 MB) and `pertpy` downloads the `kang_2018` dataset (about 40 MB). Both are
+cached for subsequent runs. The notebook writes its intermediate files to
+`vignettes/inputs/` and `vignettes/outputs/`, which are ignored by git.
 
 ## Building the image locally
 

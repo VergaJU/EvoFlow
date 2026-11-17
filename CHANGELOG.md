@@ -31,13 +31,17 @@ First public release, distributed on PyPI as `evoflow-bio` (import name
 - Command-line interface (`evoflow`) and Python API (`EvoFlow.cli.run_evoflow`).
 - Visualization helpers for optimization history, node/edge attribute
   distributions and network export (GraphML, Cytoscape JSON).
+  `plot_graph` accepts `layout_kwargs`, `node_size`, `font_size`,
+  `with_labels` and `edge_alpha`, so dense networks can be drawn legibly and
+  reproducible layouts (for example `spring` with a fixed seed) are possible.
 - Full Sphinx API documentation on Read the Docs, including a pre-executed
   end-to-end vignette.
 - Jupyter Docker image published to GHCR (`ghcr.io/vergaju/evoflow`) based on
   the Jupyter SciPy stack, with NicheNetPy and pertpy pre-installed for
   upstream network inference and example data.
 - GitHub Actions workflows for CI, GHCR image publishing and PyPI Trusted
-  Publishing.
+  Publishing. The container workflow also builds (without pushing) on pull
+  requests, and publishes `v<version>` tags in addition to semver tags.
 
 ### Changed
 
@@ -46,5 +50,14 @@ First public release, distributed on PyPI as `evoflow-bio` (import name
   wheel, and ships the GAM training data with the package.
 - Documentation and examples now install from PyPI with `pip install
   evoflow-bio`.
+- The vignette is organised as two complete analyses on the same NK-cell data:
+  the IFN-β response (IFNAR1/2 → interferon-stimulated genes) and the NK
+  activation/effector program (activating and inhibitory receptors → granule and
+  cytokine effectors). Each analysis writes its own network prefix, so the two
+  runs no longer overwrite each other.
+- CI installs the package (`pip install -e ".[dev]"`) instead of only its
+  requirements, so entry points and packaged model data are tested. A
+  `.dockerignore` keeps the image build context small, and generated Sphinx
+  stubs and vignette scratch files are ignored by git.
 
 [1.0.0]: https://github.com/VergaJU/EvoFlow/releases/tag/v1.0.0

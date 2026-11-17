@@ -70,6 +70,12 @@ instance/
 
 # Sphinx documentation
 docs/_build/
+# autosummary stubs generated at build time
+docs/generated/
+
+# Vignette scratch outputs (the executed notebook is committed separately)
+docs/vignettes/outputs/
+docs/vignettes/inputs/kang_*.csv
 
 # PyBuilder
 .pybuilder/
