@@ -10,19 +10,22 @@ designed to be executed inside the provided container
 use_case
 ```
 
-## Use case: NK-cell signalling knock-outs
+## Use case: IFN-β-stimulated NK cells
 
 {doc}`use_case` walks through a realistic analysis:
 
-1. **NicheNetPy** — from a short table of receptors of interest and target
-   genes, infer a weighted ligand-to-target signalling network and an
-   annotation table.
+1. **NicheNetPy** — from an IFN-β-focused receptor panel (IFNAR1/2, IL-2/15
+   receptor, NKG2D, IL-12 receptor) and NK transcriptional/effector targets,
+   infer a weighted ligand-to-target signalling network and an annotation
+   table.
 2. **Expression data** — load the `kang_2018` PBMC dataset with `pertpy`,
-   keep the NK cells and build the samples × genes matrix for percolation.
+   keep the **IFN-β-stimulated** NK cells and build the samples × genes matrix
+   for percolation. The control cells are used only for the detection-rate
+   comparison.
 3. **EvoFlow** — prepare the flow network, run the genetic algorithm and
    inspect the predicted knock-out sets.
 4. **Interpretation** — compare the balanced, flow, cost and redundancy
-   solutions and relate them to the biology.
+   solutions and relate them to the IFN-β response and NK effector program.
 
 You can download the notebook here: {download}`use_case.ipynb`.
 
