@@ -2,10 +2,12 @@
 Tests for the new prepare_network() orchestration method in BioNetworkPreparer.
 """
 
-import pytest
-from unittest.mock import patch, MagicMock
-import pandas as pd
+from unittest.mock import MagicMock, patch
+
 import networkx as nx
+import pandas as pd
+import pytest
+
 from EvoFlow.biology import BioNetworkPreparer
 
 

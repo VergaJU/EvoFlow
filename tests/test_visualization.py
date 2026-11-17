@@ -1,8 +1,11 @@
 import os
+
+import matplotlib.pyplot as plt
+import networkx as nx
 import numpy as np
 import pandas as pd
 
-from EvoFlow.visualization import plot_optimization_history
+from EvoFlow.visualization import plot_graph, plot_optimization_history
 
 
 def _make_sample_logs():
@@ -58,3 +61,35 @@ def test_plot_history_dataframe(tmp_path):
     assert fig is not None
     expected_file = prefix + "optimization_values.png"
     assert os.path.isfile(expected_file)
+
+
+def test_plot_graph_accepts_layout_and_readability_options(mocker):
+    """Layout and drawing options should be passed to the corresponding helpers."""
+    graph = nx.DiGraph()
+    graph.add_node("a", node_type="gene")
+    graph.add_node("b", node_type="protein")
+    graph.add_edge("a", "b")
+    draw_edges = mocker.patch(
+        "EvoFlow.visualization.nx.draw_networkx_edges",
+        wraps=nx.draw_networkx_edges,
+    )
+    layout = mocker.patch(
+        "EvoFlow.visualization.nx.spring_layout",
+        return_value={"a": (0, 0), "b": (1, 1)},
+    )
+
+    fig, ax = plot_graph(
+        graph,
+        layout="spring",
+        layout_kwargs={"k": 0.8, "iterations": 100, "seed": 42},
+        node_size=120,
+        font_size=6,
+        with_labels=False,
+        edge_alpha=0.25,
+    )
+
+    layout.assert_called_once_with(graph, k=0.8, iterations=100, seed=42)
+    assert draw_edges.call_args.kwargs["alpha"] == 0.25
+    assert not ax.texts
+    assert all(collection.get_sizes()[0] == 120 for collection in ax.collections)
+    plt.close(fig)

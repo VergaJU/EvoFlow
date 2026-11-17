@@ -1,0 +1,32 @@
+# Keep the build context small and reproducible: the Dockerfile only copies
+# pyproject.toml, README.md, LICENSE, CHANGELOG.md, EvoFlow/ and docs/vignettes/.
+
+.git
+.github
+.venv
+venv
+
+# Python caches and build artefacts
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.htmlcov/
+.coverage*
+
+# Tests and local scratch data
+tests/
+data/
+ga_run_*.jsonl
+*.log
+
+# Documentation build output and vignette scratch files
+docs/_build/
+docs/generated/
+docs/vignettes/outputs/
+docs/vignettes/inputs/kang_*.csv
+docs/vignettes/.ipynb_checkpoints/

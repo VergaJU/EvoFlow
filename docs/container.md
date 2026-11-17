@@ -1,0 +1,92 @@
+# Container
+
+A reproducible Jupyter container with **EvoFlow**, **NicheNetPy**, **pertpy**
+and their scientific Python dependencies is published on the GitHub Container
+Registry:
+
+```text
+ghcr.io/vergaju/evoflow
+```
+
+It is built from a pinned date tag of `quay.io/jupyter/scipy-notebook`, so the
+Python stack is reproducible.
+
+## Pull and run
+
+```bash
+docker run --rm -p 8888:8888 ghcr.io/vergaju/evoflow:latest
+```
+
+Then open <http://localhost:8888> and use the token printed by JupyterLab.
+
+To pin the release that matches these docs:
+
+```bash
+docker run --rm -p 8888:8888 ghcr.io/vergaju/evoflow:v1.0.0
+```
+
+Available tags are `latest`, `1.0.0`, `1.0`, `v1.0.0` and the short commit
+SHA for manual builds.
+
+## Mount a working directory
+
+Mount a host directory so notebooks and results survive the container:
+
+```bash
+docker run --rm -p 8888:8888 \
+    -v "$PWD:/home/jovyan/work/host" \
+    ghcr.io/vergaju/evoflow:latest
+```
+
+The container starts in `/home/jovyan/work`, so JupyterLab shows both the
+bundled `vignettes/` folder and your mounted `host/` folder.
+
+> Mounting over `/home/jovyan/work` itself would hide the pre-installed
+> vignettes. If you prefer that layout, copy the notebook out first:
+> `docker run --rm ghcr.io/vergaju/evoflow:latest cat
+> /home/jovyan/work/vignettes/use_case.ipynb > use_case.ipynb`.
+
+## Open the vignette
+
+The pre-installed vignette lives inside the image at:
+
+```text
+/home/jovyan/work/vignettes/use_case.ipynb
+```
+
+It is the same notebook rendered in {doc}`vignettes/index`. Run it top to
+bottom to:
+
+1. load the `kang_2018` NK cells with `pertpy` and check the IFN-β response,
+2. infer two signalling networks with NicheNetPy — one for the IFN-β response,
+   one for the NK activation/effector program,
+3. run the EvoFlow genetic algorithm on each network,
+4. inspect and interpret the knock-out candidates.
+
+The first run downloads the NicheNet reference model from Zenodo (about
+600 MB) and `pertpy` downloads the `kang_2018` dataset (about 40 MB). Both are
+cached for subsequent runs. The notebook writes its intermediate files to
+`vignettes/inputs/` and `vignettes/outputs/`, which are ignored by git.
+
+## Building the image locally
+
+While the repository is still private, build from a checkout:
+
+```bash
+docker build -f docker/Dockerfile -t evoflow:dev .
+```
+
+The Dockerfile accepts these build arguments:
+
+| Argument           | Default                                       | Meaning                                      |
+| ------------------ | --------------------------------------------- | -------------------------------------------- |
+| `BASE_IMAGE`       | `quay.io/jupyter/scipy-notebook:2026-11-02`    | Pinned Jupyter SciPy image                   |
+| `INSTALL_MODE`     | `local`                                       | `local` builds from the checkout; `pypi` installs `evoflow-bio==EVOFLOW_VERSION` |
+| `EVOFLOW_VERSION`  | `1.0.0`                                       | Version installed in `pypi` mode             |
+
+## What is inside
+
+- **Python** and JupyterLab from the upstream SciPy image.
+- **EvoFlow** itself (local or PyPI, depending on `INSTALL_MODE`).
+- **NicheNetPy** and **pertpy** (the `vignette` extra), used by the notebook.
+- The vignette notebook under `/home/jovyan/work/vignettes/`.

@@ -6,8 +6,8 @@ from deap import base, creator
 from EvoFlow import core
 from EvoFlow.core import (
     AdaptiveRates,
-    select_for_diversification,
     GAOptimizer,
+    select_for_diversification,
 )
 
 # Ensure creator is setup

@@ -27,7 +27,7 @@ EvoFlow finds optimal node knock-outs in gene regulatory networks by combining M
 
 ### Environment
 
-This checkout has a ready gitignored `venv/` with all dev deps installed. Prefer it — its `ruff` is **0.15.4**, the exact version CI pins:
+This checkout has a ready gitignored `venv/` with all dev deps installed. Prefer it — its `ruff` is **0.17.5**, the exact version CI pins:
 
 ```bash
 venv/bin/python -m pytest ...     # run tests
@@ -45,7 +45,7 @@ ruff check .
 pytest
 ```
 
-- CI pins `ruff==0.15.4` — treat it as source of truth; `.pre-commit-config.yaml` still pins stale ruff `v0.3.0`, so pre-commit results may differ from CI.
+- CI pins `ruff==0.17.5` — treat it as source of truth; `.pre-commit-config.yaml` pins the same version, so local, pre-commit and CI results agree.
 - CI runs on pushes/PRs to `master` only (also pushes to `fix_expression_matrix`).
 
 ### Tests

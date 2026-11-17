@@ -1,4 +1,5 @@
 import networkx as nx
+
 from EvoFlow.features_extraction import NetworkFeatures
 
 

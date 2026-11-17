@@ -1,10 +1,19 @@
+"""Biological data loading, expression integration and network construction.
+
+This module builds the weighted signalling graph consumed by the flow/GA
+engine. Expression matrices are reduced to one *percolation* value per gene,
+which is folded into edge capacities together with the network edge weight.
+"""
+
+import time
+
+import networkx as nx
 import numpy as np
 import pandas as pd
-import networkx as nx
 import scanpy as sc
 import scipy as sp
-import time
 from anndata import AnnData
+
 from .preparer import prepare_flow_topology
 
 # Allowed values for BioNetworkPreparer.compute_percolation(); the CLI imports
@@ -23,6 +32,16 @@ def normalize_expression(df: pd.DataFrame, method: str) -> pd.DataFrame:
 
     Returns:
         Normalized copy of df (non-negative values preserved).
+
+    Raises:
+        ValueError: If ``method`` is not one of :data:`EXPRESSION_NORMS`.
+
+    Examples:
+        >>> import pandas as pd
+        >>> from EvoFlow.biology import normalize_expression
+        >>> df = pd.DataFrame({"A": [1.0, 1.0], "B": [2.0, 0.0]})
+        >>> normalize_expression(df, "cpm").shape
+        (2, 2)
     """
     if method not in EXPRESSION_NORMS:
         raise ValueError(
@@ -48,6 +67,13 @@ def transpose_expression(df: pd.DataFrame) -> pd.DataFrame:
 
     If the first column is non-numeric it is taken as gene IDs (index) before
     transposing; all-numeric frames are transposed as-is.
+
+    Args:
+        df (pandas.DataFrame): Bulk expression table, typically genes as rows.
+
+    Returns:
+        pandas.DataFrame: Transposed frame with samples as rows and genes as
+        columns.
     """
     first_col = df.columns[0]
     if not pd.api.types.is_numeric_dtype(df[first_col]):
@@ -56,12 +82,43 @@ def transpose_expression(df: pd.DataFrame) -> pd.DataFrame:
 
 
 class BioNetworkPreparer:
-    """
-    Handles biological data loading, network construction, and capacity calculation
-    based on gene expression data.
+    """Load biological inputs and build the weighted flow network.
+
+    Typical use is::
+
+        preparer = BioNetworkPreparer(lock_targets=1)
+        preparer.load_data(network, annotation, expression_path=expr)
+        preparer.compute_percolation()
+        preparer.build_base_network()
+        preparer.update_edge_capacities()
+        sources, sinks = preparer.prepare_bioflow_topology(
+            receptors=receptors, target_genes=targets
+        )
+
+    Attributes:
+        G (networkx.DiGraph | None): The constructed network, once
+            :meth:`build_base_network` has run.
+        annotation (pandas.Series | None): Gene -> node type table.
+        expression (anndata.AnnData | pandas.DataFrame | None): Loaded
+            expression matrix.
+        regulons (pandas.DataFrame | None): Optional regulon table.
+        percolation_values (dict | bool): Gene -> percolation value, or
+            ``False`` when no expression data was loaded.
+        lock_targets (int): Bitmask controlling which original sources/sinks
+            are protected from removal by the GA.
     """
 
     def __init__(self, lock_targets: int = 0):
+        """Create a preparer.
+
+        Args:
+            lock_targets (int): Bitmask controlling which original nodes are
+                locked as sources/sinks. ``0`` disables locking, ``1`` locks
+                sources, ``2`` locks sinks and ``3`` locks both.
+
+        Raises:
+            ValueError: If ``lock_targets`` is not one of ``0, 1, 2, 3``.
+        """
         if lock_targets not in (0, 1, 2, 3):
             raise ValueError(f"lock_targets must be 0, 1, 2, or 3, got {lock_targets}")
         self.G = None
@@ -110,6 +167,10 @@ class BioNetworkPreparer:
                 column gene IDs); set True to orient them to samples x genes.
                 Not supported for h5ad. Default: False.
             **kwargs: Additional keyword arguments for extensibility.
+
+        Raises:
+            ValueError: If the expression file extension is not supported, or
+                if ``expression_transpose`` is combined with an ``.h5ad`` file.
         """
         print(f"{time.ctime()} - Reading files")
         # Store column names for later use
@@ -163,8 +224,11 @@ class BioNetworkPreparer:
                 self.regulons = self.regulons.drop(0)
 
     def filter_expression_data(self, label_col, cell_type):
-        """
-        Filters the AnnData object for a specific cell type.
+        """Keep only cells of one type in the loaded AnnData object.
+
+        Args:
+            label_col (str): Column of ``expression.obs`` holding cell labels.
+            cell_type (str): Value of ``label_col`` to keep.
         """
         self.expression = self.expression[self.expression.obs[label_col] == cell_type]
 
@@ -265,6 +329,10 @@ class BioNetworkPreparer:
             to (str, optional): Column name for target nodes. Uses stored value if not provided.
             weight (str, optional): Column name for edge weights. Uses stored value if not provided.
             edge_type (str, optional): Column name for edge types. Uses stored value if not provided.
+
+        Returns:
+            networkx.DiGraph: The constructed graph, also stored in ``self.G``.
+            Isolated nodes are dropped.
         """
         # Use provided values or fall back to stored instance variables
         start = start or self.network_start_col
@@ -323,8 +391,19 @@ class BioNetworkPreparer:
         return self.G
 
     def update_edge_capacities(self, method="multiplicative", alpha=0.5):
-        """
-        Updates edge capacities based on weights and node expression (percolation) values.
+        """Set the ``capacity`` edge attribute from weight and percolation.
+
+        Args:
+            method (str): Combination rule. ``"multiplicative"`` averages the
+                percolation of both endpoints; ``"min_expression"`` and
+                ``"max_expression"`` use the smaller/larger endpoint;
+                ``"weighted_average"`` uses ``alpha`` for the source. Defaults
+                to ``"multiplicative"``.
+            alpha (float): Source weight for ``"weighted_average"``. Defaults to
+                ``0.5``.
+
+        Raises:
+            ValueError: If ``method`` is unknown.
         """
         # Create a series for easy lookup, similar to original df usage in update_edge_capacities
         # self.percolation_values is a dict
@@ -452,6 +531,12 @@ class BioNetworkPreparer:
         )
 
     def get_graph(self):
+        """Return the constructed network.
+
+        Returns:
+            networkx.DiGraph | None: The graph stored in ``self.G`` (``None``
+            before :meth:`build_base_network` is called).
+        """
         return self.G
 
     def prepare_network(

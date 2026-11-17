@@ -1,8 +1,10 @@
+import pickle
+
 import numpy as np
 import pandas as pd
-import pickle
 import pytest
 import yaml
+
 from EvoFlow.model import GAM
 
 

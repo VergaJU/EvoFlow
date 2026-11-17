@@ -17,16 +17,46 @@ By integrating gene expression data (from `scanpy` AnnData objects) with signali
 
 ## Installation
 
-1. Clone the repository:
-   ```bash
-   git clone https://github.com/jacopo/EvoFlow.git
-   cd EvoFlow
-   ```
+EvoFlow is published on PyPI as **`evoflow-bio`** (the import name is
+`EvoFlow` and the console script is `evoflow`):
 
-2. Install dependencies:
-   ```bash
-   pip install -r requirements.txt
-   ```
+```bash
+pip install evoflow-bio
+```
+
+Optional extras:
+
+```bash
+pip install "evoflow-bio[docs]"      # Sphinx toolchain for the documentation
+pip install "evoflow-bio[vignette]"  # nichenetpy + pertpy for the vignette
+```
+
+For development, clone the repository and install it in editable mode:
+
+```bash
+git clone https://github.com/VergaJU/EvoFlow.git
+cd EvoFlow
+pip install -e ".[dev]"
+pytest
+```
+
+### Jupyter container
+
+The full workflow (NicheNet inference with NicheNetPy + EvoFlow) can be run
+from the published Jupyter container:
+
+```bash
+docker run --rm -p 8888:8888 ghcr.io/vergaju/evoflow:latest
+```
+
+Open JupyterLab and run `vignettes/use_case.ipynb`. See the
+[container documentation](https://evoflow.readthedocs.io/en/latest/container.html)
+for mounting a working directory and building the image locally.
+
+## Documentation
+
+Full API documentation and the rendered use-case vignette are available at
+<https://evoflow.readthedocs.io>.
 
 ## Usage
 
@@ -132,18 +162,25 @@ The project has been refactored into a modular package structure:
 
 ```text
 EvoFlow/
-├── biology.py               # Biological data loading, expression normalization, and graph construction
-├── core.py                  # Core Genetic Algorithm (DEAP) and MaxFlow (NetworkX) logic
-├── features_extraction.py   # Graph feature extraction (density, degree distribution, etc.)
-├── gam_preprocessing.py     # Data preprocessing pipeline for GAM training
-├── model.py                 # GAM model wrapper (training, prediction, parameter ranking)
-├── train.py                 # CLI to train the GAM model from collected data
-├── visualization.py         # Plotting utilities
-├── models/                  # Pre-trained models and configuration
-│   ├── config.yaml          # GAM feature configuration
-│   ├── model.pkl            # Trained LinearGAM
-│   └── training_data.csv    # Training dataset
-└── cli.py                   # Command-line entry point
+├── EvoFlow/                 # Python package
+│   ├── biology.py           # Biological data loading, expression normalization, and graph construction
+│   ├── core.py              # Core Genetic Algorithm (DEAP) and MaxFlow (scipy) logic
+│   ├── preparer.py          # SuperSource/SuperSink flow topology
+│   ├── features_extraction.py  # Graph feature extraction (density, degree distribution, etc.)
+│   ├── gam_preprocessing.py # Data preprocessing pipeline for GAM training
+│   ├── model.py             # GAM model wrapper (training, prediction, parameter ranking)
+│   ├── train.py             # CLI to train the GAM model from collected data
+│   ├── visualization.py     # Plotting utilities
+│   ├── utils.py             # Serialization helpers
+│   ├── models/              # Pre-trained model and configuration
+│   │   ├── config.yaml      # GAM feature configuration
+│   │   ├── model.pkl        # Trained LinearGAM
+│   │   └── training_data.csv
+│   └── cli.py               # Command-line entry point
+├── tests/                   # pytest suite
+├── docs/                    # Sphinx sources, API reference and the vignette
+├── docker/                  # Jupyter image (EvoFlow + NicheNetPy + pertpy)
+└── .github/workflows/       # CI, GHCR and PyPI release workflows
 ```
 
 ### Architecture

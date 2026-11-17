@@ -1,4 +1,5 @@
 import pytest
+
 from EvoFlow.train import load_gam_class
 
 

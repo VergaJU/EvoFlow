@@ -6,11 +6,21 @@ import argparse
 import importlib.util
 import sys
 from pathlib import Path
-from typing import Type
 
 
-def load_gam_class(module_path: Path) -> Type:
-    """Load the `GAM` class from either `model.py` or `models.py`."""
+def load_gam_class(module_path: Path) -> type:
+    """Load the ``GAM`` class from either ``model.py`` or ``models.py``.
+
+    Args:
+        module_path (pathlib.Path): Directory searched for the module.
+
+    Returns:
+        type: The ``GAM`` class defined in the module.
+
+    Raises:
+        ImportError: If the module cannot be imported.
+        FileNotFoundError: If neither ``model.py`` nor ``models.py`` exists.
+    """
     candidates = [module_path / "model.py", module_path / "models.py"]
     for candidate in candidates:
         if candidate.exists():
@@ -20,7 +30,7 @@ def load_gam_class(module_path: Path) -> Type:
             module = importlib.util.module_from_spec(spec)
             sys.modules[spec.name] = module
             spec.loader.exec_module(module)
-            return getattr(module, "GAM")
+            return module.GAM
 
     raise FileNotFoundError(
         "Could not find a GAM module at src/model.py or src/models.py"
@@ -28,12 +38,23 @@ def load_gam_class(module_path: Path) -> Type:
 
 
 def main() -> None:
+    """CLI entry point: retrain the GAM model and save it with its scores.
+
+    Run with ``python -m EvoFlow.train [--config PATH]``. Training data is read
+    from the path declared in the config and the resulting model overwrites the
+    packaged ``model.pkl`` (or the path configured for a custom config). The
+    cross-validation scores are pickled into the same file alongside the model.
+
+    Examples:
+        >>> # from the command line
+        >>> # python -m EvoFlow.train --config EvoFlow/models/config.yaml
+    """
     parser = argparse.ArgumentParser(description="Train and save a GAM model")
     parser.add_argument(
         "--config",
         type=Path,
         default=Path(__file__).resolve().parent / "models/config.yaml",
-        help="Path to the configuartion file",
+        help="Path to the configuration file",
     )
     args = parser.parse_args()
 
