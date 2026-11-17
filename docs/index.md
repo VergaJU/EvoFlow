@@ -73,7 +73,7 @@ run_evoflow(
     mediators_raw="TBX21,IFNG",
     ligands_file="ligands.csv",
     targets="GZMB,PRF1",
-    label="cell_type",       # h5ad only; optional with celltype
+    label="cell_type",  # h5ad only; optional with celltype
     celltype="NK",
     generations=1000,
 )
